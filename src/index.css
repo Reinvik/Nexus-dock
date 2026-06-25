@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+  --color-light-bg: #f8fafc; /* Slate-50 */
+  --color-light-card: #ffffff;
+  --color-brand-primary: #059669; /* Emerald-600 */
+  --color-brand-secondary: #10b981; /* Emerald-500 */
+  --color-brand-hover: #047857; /* Emerald-700 */
+  --color-brand-light: #ecfdf5; /* Emerald-50 */
+  --color-brand-border: #a7f3d0; /* Emerald-200 */
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-light-bg);
+  color: #0f172a; /* Slate-900 */
+}
