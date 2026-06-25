@@ -131,15 +131,13 @@ export default function App() {
   const [citaTime, setCitaTime] = useState<string>('09:00');
   const [selectedDockIdInModal, setSelectedDockIdInModal] = useState<string>('');
 
-  // States para Historial de Operaciones (pendiente de implementación)
-  const [_historySearch, setHistorySearch] = useState('');
-  const [_historyStatus, setHistoryStatus] = useState<string>('todos');
-  const [_historyOpType, setHistoryOpType] = useState<string>('todos');
-  const [_historyCargoType, setHistoryCargoType] = useState<string>('todos');
-  const [_historyPage, setHistoryPage] = useState(1);
-
-  // Suprimir advertencias de setters no usados aún
-  void setHistorySearch; void setHistoryStatus; void setHistoryOpType; void setHistoryCargoType; void setHistoryPage;
+  // States para Historial de Operaciones
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyStatus, setHistoryStatus] = useState<string>('todos');
+  const [historyOpType, setHistoryOpType] = useState<string>('todos');
+  const [historyCargoType, setHistoryCargoType] = useState<string>('todos');
+  const [historyPage, setHistoryPage] = useState(1);
+  const HISTORY_PAGE_SIZE = 15;
 
 
   // Reloj de cabecera
@@ -1712,10 +1710,11 @@ export default function App() {
               {(() => {
                 const filtered = trucks.filter(t => {
                   const searchLower = historySearch.toLowerCase();
-                  const matchSearch = !historySearch || [t.driver, t.tractor_plate, t.trailer_plate, t.company].some(f => f?.toLowerCase().includes(searchLower));
-                  const matchStatus = historyStatus === 'todos' || t.status === historyStatus;
+                  const matchSearch = !historySearch || [t.driver, t.tractor_plate, t.trailer_plate, t.carrier].some(f => f?.toLowerCase().includes(searchLower));
+                  const mappedHistoryStatus = historyStatus === 'en_patio' ? 'espera' : historyStatus === 'en_anden' ? 'anden' : historyStatus;
+                  const matchStatus = historyStatus === 'todos' || t.status === mappedHistoryStatus;
                   const matchOp = historyOpType === 'todos' || t.type === historyOpType;
-                  const matchCargo = historyCargoType === 'todos' || t.cargo_type === historyCargoType;
+                  const matchCargo = historyCargoType === 'todos' || t.carrier === historyCargoType;
                   return matchSearch && matchStatus && matchOp && matchCargo;
                 }).sort((a, b) => new Date(b.entry_time).getTime() - new Date(a.entry_time).getTime());
 
@@ -1758,13 +1757,13 @@ export default function App() {
                           ) : paginated.map(t => {
                             const dockName = docks.find(d => d.id === t.dock_id)?.name || '—';
                             const entryDate = new Date(t.entry_time);
-                            const appointmentDate = t.appointment_time ? new Date(t.appointment_time) : null;
+                            const appointmentDate = t.scheduled_entry_time ? new Date(t.scheduled_entry_time) : null;
                             const endDate = t.end_time ? new Date(t.end_time) : null;
                             return (
                               <tr key={t.id} className="hover:bg-slate-50/60 transition-colors">
                                 <td className="px-4 py-3">
                                   <p className="font-bold text-slate-800">{t.driver}</p>
-                                  <p className="text-[10px] text-slate-400 font-semibold">{t.company || '—'}</p>
+                                  <p className="text-[10px] text-slate-400 font-semibold">{t.carrier || '—'}</p>
                                 </td>
                                 <td className="px-4 py-3 font-mono font-bold text-slate-700">{t.tractor_plate || '—'}</td>
                                 <td className="px-4 py-3 font-mono text-slate-500">{t.trailer_plate || '—'}</td>
@@ -1773,7 +1772,7 @@ export default function App() {
                                     {t.type}
                                   </span>
                                 </td>
-                                <td className="px-4 py-3 text-slate-600 font-semibold">{t.cargo_type || '—'}</td>
+                                <td className="px-4 py-3 text-slate-600 font-semibold">{t.carrier || '—'}</td>
                                 <td className="px-4 py-3 text-slate-600 font-semibold">{dockName}</td>
                                 <td className="px-4 py-3">{statusBadge(t.status)}</td>
                                 <td className="px-4 py-3 text-slate-500 font-mono">
@@ -1818,14 +1817,14 @@ export default function App() {
             (() => {
               const total = trucks.length;
               const completados = trucks.filter(t => t.status === 'completado');
-              const enAndenes = trucks.filter(t => t.status === 'en_anden');
-              const enPatio   = trucks.filter(t => t.status === 'en_patio');
+              const enAndenes = trucks.filter(t => t.status === 'anden');
+              const enPatio   = trucks.filter(t => t.status === 'espera');
               const citasHoy  = trucks.filter(t => t.status === 'cita');
 
               // Tiempo promedio en andén (minutos)
               const tiemposAnden = completados
-                .filter(t => t.end_time && t.appointment_time)
-                .map(t => (new Date(t.end_time!).getTime() - new Date(t.appointment_time!).getTime()) / 60000);
+                .filter(t => t.end_time && t.scheduled_entry_time)
+                .map(t => (new Date(t.end_time!).getTime() - new Date(t.scheduled_entry_time!).getTime()) / 60000);
               const avgAnden = tiemposAnden.length > 0
                 ? Math.round(tiemposAnden.reduce((a, b) => a + b, 0) / tiemposAnden.length)
                 : null;
@@ -1834,7 +1833,7 @@ export default function App() {
               const descargas = trucks.filter(t => t.type === 'Descarga').length;
 
               const cargaDist: Record<string, number> = {};
-              trucks.forEach(t => { const k = t.cargo_type || 'Sin definir'; cargaDist[k] = (cargaDist[k] || 0) + 1; });
+              trucks.forEach(t => { const k = t.carrier || 'Sin definir'; cargaDist[k] = (cargaDist[k] || 0) + 1; });
 
               const now = new Date();
               const days7: { label: string; count: number }[] = [];
@@ -2009,7 +2008,7 @@ export default function App() {
                     <h3 className="font-extrabold text-sm text-slate-800 mb-4">Mapa de Estado de Andenes</h3>
                     <div className="flex flex-wrap gap-3">
                       {docks.map(dock => {
-                        const activeTruck = trucks.find(t => t.dock_id === dock.id && t.status === 'en_anden');
+                        const activeTruck = trucks.find(t => t.dock_id === dock.id && t.status === 'anden');
                         const isOcupado = dock.status === 'Ocupado';
                         return (
                           <div key={dock.id} className={`flex flex-col items-center justify-center w-24 h-24 rounded-2xl border-2 shadow-sm transition-all ${isOcupado ? 'bg-purple-50 border-purple-300' : 'bg-emerald-50 border-emerald-200'}`}>

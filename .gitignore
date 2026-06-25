@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Scratch & Dev Utilities
+scratch/
+.env
+.env*.local
+
+
+.vercel
