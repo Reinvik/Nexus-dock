@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App.tsx';
 import LoginPage from './components/LoginPage.tsx';
+import DriverPortal from './components/DriverPortal.tsx';
 import { supabase } from './lib/supabase.ts';
 import type { User } from '@supabase/supabase-js';
 
@@ -11,6 +12,9 @@ const ALLOWED_DOMAIN = 'cial.cl';
 function Root() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [driverModeActive, setDriverModeActive] = useState<boolean>(
+    localStorage.getItem('nexus_driver_view_active') === 'true'
+  );
 
   useEffect(() => {
     // Obtener sesión actual
@@ -52,7 +56,29 @@ function Root() {
     );
   }
 
-  return user ? <App /> : <LoginPage />;
+  // 1. Si el modo de choferes está activo, se muestra el Portal de Conductores
+  if (driverModeActive) {
+    return (
+      <DriverPortal 
+        onBackToLogin={() => {
+          localStorage.removeItem('nexus_driver_view_active');
+          setDriverModeActive(false);
+        }} 
+      />
+    );
+  }
+
+  // 2. Si no está activo, flujo normal de auth
+  return user ? (
+    <App />
+  ) : (
+    <LoginPage 
+      onDriverClick={() => {
+        localStorage.setItem('nexus_driver_view_active', 'true');
+        setDriverModeActive(true);
+      }} 
+    />
+  );
 }
 
 createRoot(document.getElementById('root')!).render(

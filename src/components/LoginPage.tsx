@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import cialLogo from '../assets/cial-alimentos-logo.png';
-import { Mail, Lock, ArrowRight, CheckCircle2, AlertCircle, Eye, EyeOff, RotateCcw } from 'lucide-react';
+import { Mail, Lock, ArrowRight, CheckCircle2, AlertCircle, Eye, EyeOff, RotateCcw, Truck } from 'lucide-react';
 
 type AuthMode = 'login' | 'register' | 'forgot' | 'check_email';
 
 const ALLOWED_DOMAIN = 'cial.cl';
 
-export default function LoginPage() {
+export default function LoginPage({ onDriverClick }: { onDriverClick: () => void }) {
   const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -290,6 +290,22 @@ export default function LoginPage() {
                     Crear cuenta CiAL →
                   </button>
                 </div>
+
+                <div className="relative flex items-center justify-center my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-slate-200"></div>
+                  </div>
+                  <span className="relative px-3 text-[10px] text-slate-400 font-extrabold uppercase bg-white">¿Eres transportista?</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onDriverClick}
+                  className="w-full flex items-center justify-center gap-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 py-3 rounded-xl text-xs font-extrabold transition-all cursor-pointer shadow-sm active:scale-95"
+                >
+                  <Truck className="w-4 h-4 text-[#0a5c36]" />
+                  Avisar Llegada / Monitorear mi Andén
+                </button>
               </div>
             )}
 
