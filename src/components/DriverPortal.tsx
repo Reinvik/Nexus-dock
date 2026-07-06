@@ -413,10 +413,24 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
                   <span className="text-xs text-slate-400 font-semibold">Tipo Operación</span>
                   <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${foundCita.type === 'Descarga' ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>{foundCita.type}</span>
                 </div>
-                <div className="flex justify-between">
+                 <div className="flex justify-between border-b border-slate-200/60 pb-2">
                   <span className="text-xs text-slate-400 font-semibold">Carga</span>
                   <span className="text-xs text-slate-800 font-bold">{foundCita.carrier}</span>
                 </div>
+                {foundCita.scheduled_entry_time && (
+                  <div className="flex justify-between pt-1">
+                    <span className="text-xs text-slate-400 font-semibold">Horario Citado</span>
+                    <span className="text-xs text-emerald-700 font-extrabold flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-lg leading-none">
+                      <Clock className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                      {(() => {
+                        const dateObj = new Date(foundCita.scheduled_entry_time);
+                        const fecha = dateObj.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' });
+                        const hora = dateObj.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+                        return `${fecha} - ${hora} hrs`;
+                      })()}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">
