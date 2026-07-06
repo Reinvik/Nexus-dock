@@ -936,19 +936,14 @@ export default function App() {
           </div>
         </nav>
 
-        {/* Info Conexión + Cerrar Sesión */}
-        <div className="p-4 border-t border-white/10 bg-[#08482a] text-[10px] text-emerald-200 font-bold space-y-2">
-          <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>Conectado a Supabase</span>
-          </div>
-          <div className="text-emerald-300/70 truncate">Nexus Staging: Main</div>
+        {/* Cerrar Sesión */}
+        <div className="p-4 border-t border-white/10 bg-[#08482a]">
           <button
             onClick={() => supabase.auth.signOut()}
-            className="flex items-center gap-1.5 w-full mt-1 text-red-300 hover:text-red-200 hover:bg-red-900/20 px-2 py-1.5 rounded-lg transition-all cursor-pointer"
+            className="flex items-center gap-1.5 w-full text-red-300 hover:text-red-200 hover:bg-red-900/20 px-2.5 py-2 rounded-xl transition-all cursor-pointer font-bold text-xs"
             title="Cerrar sesión"
           >
-            <LogOut className="w-3 h-3 shrink-0" />
+            <LogOut className="w-3.5 h-3.5 shrink-0" />
             <span>Cerrar Sesión</span>
           </button>
         </div>
