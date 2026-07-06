@@ -283,9 +283,7 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
       {/* Header Fijo */}
       <header className="bg-gradient-to-br from-[#0a5c36] to-[#0d7a49] text-white px-6 py-4 flex items-center justify-between shadow-md select-none sticky top-0 z-40">
         <div className="flex items-center gap-3">
-          <div className="bg-white rounded-xl p-1.5 shadow-sm">
-            <img src={cialLogo} alt="CiAL Logo" className="w-8 h-8 object-contain" />
-          </div>
+          <img src={cialLogo} alt="CiAL Logo" className="w-14 h-14 object-contain drop-shadow-sm" />
           <div>
             <h1 className="font-extrabold text-sm tracking-tight leading-none">Portal Conductores</h1>
             <span className="text-emerald-200 font-bold text-[9px] tracking-widest uppercase">CiAL Alimentos</span>

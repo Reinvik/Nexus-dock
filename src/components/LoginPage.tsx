@@ -172,14 +172,12 @@ export default function LoginPage({ onDriverClick }: { onDriverClick: () => void
             {/* Brillo superior */}
             <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
             
-            <div className="flex items-center justify-center gap-3 mb-3">
-              <div className="bg-white rounded-2xl p-2.5 shadow-lg">
-                <img
-                  src={cialLogo}
-                  alt="CiAL Alimentos"
-                  className="w-10 h-10 object-contain"
-                />
-              </div>
+            <div className="flex items-center justify-center gap-4 mb-3">
+              <img
+                src={cialLogo}
+                alt="CiAL Alimentos"
+                className="w-18 h-18 object-contain drop-shadow-md"
+              />
               <div className="text-left">
                 <h1 className="text-white font-extrabold text-lg leading-none tracking-tight">Control</h1>
                 <span className="text-emerald-200 font-bold text-xs tracking-widest uppercase leading-none">Recepción</span>

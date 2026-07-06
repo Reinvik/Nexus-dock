@@ -891,7 +891,7 @@ export default function App() {
           <img 
             src={cialLogo} 
             alt="CiAL Alimentos" 
-            className="w-12 h-12 rounded-xl object-contain bg-white p-0.5 shadow-sm" 
+            className="w-16 h-16 object-contain drop-shadow-sm" 
           />
           <div>
             <h2 className="text-sm font-extrabold tracking-wider leading-none">Control</h2>
