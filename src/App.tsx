@@ -775,7 +775,10 @@ export default function App() {
       const dateStr = truck.exit_time || truck.end_time || truck.entry_time;
       if (!dateStr) return;
       const dateObj = new Date(dateStr);
-      const localDate = dateObj.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      const yyyy = dateObj.getFullYear();
+      const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const dd = String(dateObj.getDate()).padStart(2, '0');
+      const localDate = `${yyyy}-${mm}-${dd}`;
       
       if (!groups[localDate]) {
         groups[localDate] = [];
@@ -787,7 +790,7 @@ export default function App() {
   };
 
   const formatGroupDate = (dateStr: string) => {
-    const [day, month, year] = dateStr.split('/');
+    const [year, month, day] = dateStr.split('-');
     const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
     const today = new Date();
     const yesterday = new Date();
