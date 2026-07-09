@@ -7,6 +7,4 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Faltan las variables de entorno de Supabase en .env.local');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  db: { schema: 'dock' }
-});
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
