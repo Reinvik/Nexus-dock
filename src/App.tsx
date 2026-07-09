@@ -762,6 +762,87 @@ export default function App() {
     (truck.carrier && truck.carrier.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
+  const getGroupedCompletedTrucks = () => {
+    const completed = filteredTrucks.filter(t => t.status === 'completado')
+      .sort((a, b) => {
+        const timeA = a.exit_time ? new Date(a.exit_time).getTime() : (a.end_time ? new Date(a.end_time).getTime() : 0);
+        const timeB = b.exit_time ? new Date(b.exit_time).getTime() : (b.end_time ? new Date(b.end_time).getTime() : 0);
+        return timeB - timeA;
+      });
+
+    const groups: { [key: string]: YardOperation[] } = {};
+    completed.forEach(truck => {
+      const dateStr = truck.exit_time || truck.end_time || truck.entry_time;
+      if (!dateStr) return;
+      const dateObj = new Date(dateStr);
+      const localDate = dateObj.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      
+      if (!groups[localDate]) {
+        groups[localDate] = [];
+      }
+      groups[localDate].push(truck);
+    });
+
+    return groups;
+  };
+
+  const formatGroupDate = (dateStr: string) => {
+    const [day, month, year] = dateStr.split('/');
+    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const isToday = date.getDate() === today.getDate() &&
+                    date.getMonth() === today.getMonth() &&
+                    date.getFullYear() === today.getFullYear();
+                    
+    const isYesterday = date.getDate() === yesterday.getDate() &&
+                        date.getMonth() === yesterday.getMonth() &&
+                        date.getFullYear() === yesterday.getFullYear();
+
+    if (isToday) return `Hoy (${day}/${month})`;
+    if (isYesterday) return `Ayer (${day}/${month})`;
+    
+    const dayName = date.toLocaleDateString('es-CL', { weekday: 'long' });
+    const capitalizedDay = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+    return `${capitalizedDay} (${day}/${month})`;
+  };
+
+  const handleUpdateDockStatus = async (dockId: string, newStatus: 'Disponible' | 'Ocupado' | 'Mantenimiento') => {
+    setErrorMsg(null);
+
+    if (newStatus === 'Mantenimiento') {
+      const activeTruckInDock = trucks.find(t => t.dock_id === dockId && t.status === 'anden');
+      if (activeTruckInDock) {
+        if (!window.confirm(`El andén tiene un camión activo (${activeTruckInDock.driver}). ¿Estás seguro de poner el andén en Mantenimiento? El camión permanecerá en andén pero se marcará como mantenimiento.`)) {
+          return;
+        }
+      }
+    }
+
+    setDocks(prev => prev.map(d => {
+      if (d.id === dockId) {
+        return { ...d, status: newStatus };
+      }
+      return d;
+    }));
+
+    try {
+      const { error } = await supabase
+        .from('docks')
+        .update({ status: newStatus })
+        .eq('id', dockId);
+
+      if (error) throw error;
+      fetchData();
+    } catch (err: any) {
+      console.error('Error al actualizar estado del andén:', err);
+      setErrorMsg('Error al actualizar el estado del andén en el servidor.');
+      fetchData();
+    }
+  };
+
   const formatHeaderDate = (date: Date) => {
     const options: Intl.DateTimeFormatOptions = { 
       weekday: 'long', 
@@ -1345,82 +1426,99 @@ export default function App() {
                   </span>
                 </div>
                 
-                <div className="space-y-4 flex-1 overflow-y-auto">
-                  {filteredTrucks.filter(t => t.status === 'completado')
-                    .sort((a, b) => {
-                      const timeA = a.exit_time ? new Date(a.exit_time).getTime() : 0;
-                      const timeB = b.exit_time ? new Date(b.exit_time).getTime() : 0;
-                      return timeB - timeA;
-                    })
-                    .map(truck => {
-                    const compliance = checkExitCompliance(truck);
-                    return (
-                      <div 
-                        key={truck.id} 
-                        draggable={true}
-                        onDragStart={(e) => handleDragStart(e, truck.id, truck.status)}
-                        className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-slate-300 transition-all cursor-grab active:cursor-grabbing hover:shadow-md opacity-80 hover:opacity-100"
-                      >
-                        <div className="flex justify-between items-start gap-2">
-                          <div className="flex flex-wrap gap-1.5">
-                            <span className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-500 font-bold tracking-wider">
-                              TR: {truck.tractor_plate || 'S/T'}
-                            </span>
-                            <span className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-400 font-bold tracking-wider">
-                              R: {truck.trailer_plate || 'S/R'}
-                            </span>
+                <div className="space-y-6 flex-1 overflow-y-auto pr-1">
+                  {(() => {
+                    const grouped = getGroupedCompletedTrucks();
+                    const dates = Object.keys(grouped);
+
+                    if (dates.length === 0) {
+                      return <div className="text-center py-16 text-slate-400 text-sm font-semibold">Sin despachos hoy</div>;
+                    }
+
+                    return dates.map(dateStr => (
+                      <div key={dateStr} className="space-y-3">
+                        {/* Cabecera divisoria del día */}
+                        <div className="relative flex items-center justify-center my-4 select-none">
+                          <div className="absolute inset-0 flex items-center">
+                            <div className="w-full border-t border-slate-200/80"></div>
                           </div>
-                          
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRevertStatus(truck);
-                              }}
-                              title="Regresar a Andén"
-                              className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteTruck(truck.id);
-                              }}
-                              title="Eliminar registro"
-                              className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                            <span className={`text-[9px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 ${compliance === 'A Tiempo' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              {compliance}
-                            </span>
-                          </div>
+                          <span className="relative px-3 py-1 text-[9px] text-slate-500 font-extrabold uppercase bg-slate-100 rounded-full border border-slate-200 shadow-xs">
+                            {formatGroupDate(dateStr)}
+                          </span>
                         </div>
-                        
-                        <div className="text-xs text-slate-500 font-semibold space-y-1 pt-1 border-t border-slate-50">
-                          <p className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-slate-400" /> Andén: {truck.dock?.name || 'S/A'}</p>
-                          <p className="flex items-center gap-1.5"><User className="w-3.5 h-3.5 text-slate-400" /> Chofer: {truck.driver}</p>
-                          <p className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-slate-400" /> Duración: {
-                            truck.start_time && truck.end_time 
-                              ? `${Math.round((new Date(truck.end_time).getTime() - new Date(truck.start_time).getTime()) / (1000 * 60))} min`
-                              : 'N/A'
-                          }</p>
-                          {truck.scheduled_entry_time && truck.scheduled_end_time && (
-                            <p className="text-[10px] text-[#0a5c36] font-bold pl-5">
-                              Citación: {new Date(truck.scheduled_entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} - {new Date(truck.scheduled_end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
-                            </p>
-                          )}
+
+                        {/* Listado de tarjetas de este día */}
+                        <div className="space-y-3">
+                          {grouped[dateStr].map(truck => {
+                            const compliance = checkExitCompliance(truck);
+                            return (
+                              <div 
+                                key={truck.id} 
+                                draggable={true}
+                                onDragStart={(e) => handleDragStart(e, truck.id, truck.status)}
+                                className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-slate-300 transition-all cursor-grab active:cursor-grabbing hover:shadow-md opacity-80 hover:opacity-100"
+                              >
+                                <div className="flex justify-between items-start gap-2">
+                                  <div className="flex flex-wrap gap-1.5">
+                                    <span className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-500 font-bold tracking-wider">
+                                      TR: {truck.tractor_plate || 'S/T'}
+                                    </span>
+                                    <span className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-400 font-bold tracking-wider">
+                                      R: {truck.trailer_plate || 'S/R'}
+                                    </span>
+                                  </div>
+                                  
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRevertStatus(truck);
+                                      }}
+                                      title="Regresar a Andén"
+                                      className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteTruck(truck.id);
+                                      }}
+                                      title="Eliminar registro"
+                                      className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                    <span className={`text-[9px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 ${compliance === 'A Tiempo' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
+                                      <CheckCircle2 className="w-3.5 h-3.5" />
+                                      {compliance}
+                                    </span>
+                                  </div>
+                                </div>
+                                
+                                <div className="text-xs text-slate-500 font-semibold space-y-1 pt-1 border-t border-slate-50">
+                                  <p className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-slate-400" /> Andén: {truck.dock?.name || 'S/A'}</p>
+                                  <p className="flex items-center gap-1.5"><User className="w-3.5 h-3.5 text-slate-400" /> Chofer: {truck.driver}</p>
+                                  <p className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-slate-400" /> Duración: {
+                                    truck.start_time && truck.end_time 
+                                      ? `${Math.round((new Date(truck.end_time).getTime() - new Date(truck.start_time).getTime()) / (1000 * 60))} min`
+                                      : 'N/A'
+                                  }</p>
+                                  {truck.scheduled_entry_time && truck.scheduled_end_time && (
+                                    <p className="text-[10px] text-[#0a5c36] font-bold pl-5">
+                                      Citación: {new Date(truck.scheduled_entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} - {new Date(truck.scheduled_end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
-                    );
-                  })}
-                  {filteredTrucks.filter(t => t.status === 'completado').length === 0 && (
-                    <div className="text-center py-16 text-slate-400 text-sm font-semibold">Sin despachos hoy</div>
-                  )}
+                    ));
+                  })()}
                 </div>
               </div>
 
@@ -1491,15 +1589,21 @@ export default function App() {
                         <th key={dock.id} className="p-3 border-r border-slate-200 last:border-r-0 text-center uppercase tracking-wider">
                           <div className="flex flex-col items-center gap-1">
                             <span>{dock.name}</span>
-                            <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold shadow-sm ${
-                              dock.status === 'Disponible' 
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
-                                : dock.status === 'Ocupado' 
-                                ? 'bg-teal-50 text-teal-700 border border-teal-100 animate-pulse' 
-                                : 'bg-red-50 text-red-700 border border-red-100'
-                            }`}>
-                              {dock.status}
-                            </span>
+                            <select
+                              value={dock.status}
+                              onChange={(e) => handleUpdateDockStatus(dock.id, e.target.value as any)}
+                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border shadow-xs cursor-pointer focus:outline-none focus:ring-1 focus:ring-[#0a5c36]/20 transition-all ${
+                                dock.status === 'Disponible' 
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' 
+                                  : dock.status === 'Ocupado' 
+                                  ? 'bg-teal-50 text-teal-700 border-teal-200 animate-pulse hover:bg-teal-100' 
+                                  : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                              }`}
+                            >
+                              <option value="Disponible">Disponible</option>
+                              <option value="Ocupado" disabled={dock.status !== 'Ocupado'}>Ocupado</option>
+                              <option value="Mantenimiento">Mantenimiento</option>
+                            </select>
                           </div>
                         </th>
                       ))}
