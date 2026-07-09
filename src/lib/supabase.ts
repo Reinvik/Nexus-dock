@@ -10,29 +10,19 @@ if (!supabaseUrl || !supabaseAnonKey) {
 const getDbSchema = (): string => {
   if (typeof window === 'undefined') return 'public';
 
-  const hostname = window.location.hostname;
+  // 1. Permitir forzar y probar cualquier esquema vía query parameter (?schema=nombre) en cualquier entorno
+  const params = new URLSearchParams(window.location.search);
+  const forcedSchema = params.get('schema');
   
-  // 1. En entorno de desarrollo (localhost, localhost IP, o IP de red local)
-  if (
-    hostname.includes('localhost') || 
-    hostname.includes('127.0.0.1') || 
-    hostname.startsWith('192.168.') || 
-    hostname.startsWith('10.')
-  ) {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('schema') || 'public';
-  }
-
-  // 2. En producción, extraer el primer subdominio (ej: dock.nexusnetwork.cl -> dock)
-  const parts = hostname.split('.');
-  if (parts.length > 2) {
-    const sub = parts[0].toLowerCase();
-    const knownSchemas = ['dock', 'lean', 'medical', 'crm', 'restaurant', 'garage', 'punto_nexus', 'network', 'flow'];
-    if (knownSchemas.includes(sub)) {
-      return sub;
+  if (forcedSchema) {
+    const knownSchemas = ['dock', 'lean', 'medical', 'crm', 'restaurant', 'garage', 'punto_nexus', 'network', 'flow', 'public'];
+    if (knownSchemas.includes(forcedSchema.toLowerCase())) {
+      return forcedSchema.toLowerCase();
     }
   }
 
+  // 2. Por defecto en producción usaremos 'public' para evitar caídas (406) si 'dock' no está expuesto en Supabase Cloud.
+  // Una vez expuesto en la consola web de Supabase, puedes reactivar la detección automática por subdominio.
   return 'public';
 };
 
