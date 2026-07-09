@@ -10,6 +10,8 @@ if (!supabaseUrl || !supabaseAnonKey) {
 const getDbSchema = (): string => {
   if (typeof window === 'undefined') return 'public';
 
+  const hostname = window.location.hostname;
+
   // 1. Permitir forzar y probar cualquier esquema vía query parameter (?schema=nombre) en cualquier entorno
   const params = new URLSearchParams(window.location.search);
   const forcedSchema = params.get('schema');
@@ -20,10 +22,27 @@ const getDbSchema = (): string => {
       return forcedSchema.toLowerCase();
     }
   }
+  
+  // 2. En desarrollo local (localhost, localhost IP, o IP de red local), usar public por defecto si no hay query param
+  if (
+    hostname.includes('localhost') || 
+    hostname.includes('127.0.0.1') || 
+    hostname.startsWith('192.168.') || 
+    hostname.startsWith('10.')
+  ) {
+    return 'public';
+  }
 
-  // 2. Por defecto usaremos 'public' de forma temporal para evitar errores 406.
-  // Una vez que Supabase exponga la API para 'dock' de forma efectiva en tu panel y verifiques que
-  // https://dock.nexusnetwork.cl/?schema=dock funciona sin errores, reactivaremos la resolución automática.
+  // 3. En producción, extraer el primer subdominio (ej: dock.nexusnetwork.cl -> dock)
+  const parts = hostname.split('.');
+  if (parts.length > 2) {
+    const sub = parts[0].toLowerCase();
+    const knownSchemas = ['dock', 'lean', 'medical', 'crm', 'restaurant', 'garage', 'punto_nexus', 'network', 'flow'];
+    if (knownSchemas.includes(sub)) {
+      return sub;
+    }
+  }
+
   return 'public';
 };
 
