@@ -18,7 +18,11 @@ import {
   Trash2,
   Package,
   Truck,
-  LogOut
+  LogOut,
+  Factory,
+  Send,
+  Activity,
+  Building2
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -44,6 +48,9 @@ interface Vehicle {
   type: 'Tractor' | 'Rampla';
 }
 
+export type OperationStatus = 'cita' | 'planta_carga' | 'en_ruta' | 'espera' | 'anden' | 'completado';
+export type OperationOrigin = 'planta_2' | 'patio_cd';
+
 interface YardOperation {
   id: string;
   patent: string | null;
@@ -55,7 +62,10 @@ interface YardOperation {
   driver: string;
   carrier: string;
   type: 'Carga' | 'Descarga';
-  status: 'cita' | 'espera' | 'anden' | 'completado';
+  status: OperationStatus;
+  origin?: OperationOrigin | null;
+  dispatch_time?: string | null;
+  plant_loading_time?: string | null;
   dock_id: string | null;
   entry_time: string;
   start_time: string | null;
@@ -80,9 +90,20 @@ const formatLocalDatetime = (date: Date) => {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 };
 
+const formatDurationMs = (ms: number | null | undefined) => {
+  if (ms === null || ms === undefined || ms < 0 || isNaN(ms)) return '—';
+  const totalMin = Math.floor(ms / (60 * 1000));
+  const hrs = Math.floor(totalMin / 60);
+  const min = totalMin % 60;
+  if (hrs > 0) return `${hrs}h ${min}m`;
+  return `${min} min`;
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'yard' | 'scheduler' | 'history' | 'reports'>('yard');
+  const [activeTab, setActiveTab] = useState<'yard' | 'planta2' | 'scheduler' | 'history' | 'reports'>('yard');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showPlanta2AddModal, setShowPlanta2AddModal] = useState(false);
+  const [selectedTruckForTimeline, setSelectedTruckForTimeline] = useState<YardOperation | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -425,7 +446,133 @@ export default function App() {
     setDurationMinutes(15);
   };
 
-  // Mover camión de Cita a Patio (Espera)
+  // Despachar camión desde Planta 2 a Ruta
+  const handleDispatchPlanta2 = async (truckId: string) => {
+    setErrorMsg(null);
+    const nowISO = new Date().toISOString();
+
+    // UI Optimista
+    setTrucks(prev => prev.map(t => {
+      if (t.id === truckId) {
+        return {
+          ...t,
+          status: 'en_ruta' as const,
+          dispatch_time: nowISO
+        };
+      }
+      return t;
+    }));
+
+    try {
+      const { error } = await supabase
+        .from('yard_operations')
+        .update({
+          status: 'en_ruta',
+          dispatch_time: nowISO
+        })
+        .eq('id', truckId);
+
+      if (error) throw error;
+      fetchData();
+    } catch (err: any) {
+      console.error('Error al despachar desde Planta 2:', err);
+      setErrorMsg('Error al despachar el camión desde Planta 2.');
+      fetchData();
+    }
+  };
+
+  // Crear despacho nuevo en Planta 2
+  const handleAddPlanta2Truck = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+
+    let finalDriverName = '';
+    let finalDriverId: string | null = null;
+    let finalRut: string | null = null;
+    let finalPhone: string | null = null;
+
+    if (selectedDriverId === 'manual') {
+      if (!manualDriverName.trim()) {
+        setErrorMsg('Por favor ingrese el nombre del chofer.');
+        return;
+      }
+      finalDriverName = manualDriverName.trim();
+      finalRut = driverRut.trim() || null;
+      finalPhone = driverPhone.trim() || null;
+    } else {
+      const driverObj = drivers.find(d => d.id === selectedDriverId);
+      if (!driverObj) {
+        setErrorMsg('Por favor seleccione un chofer de la lista.');
+        return;
+      }
+      finalDriverName = driverObj.name;
+      finalDriverId = driverObj.id;
+      finalRut = driverObj.rut;
+      finalPhone = driverObj.phone;
+    }
+
+    let finalTractor = isManualTractor ? manualTractorPlate.trim().toUpperCase() : (vehicles.find(v => v.id === selectedTractorId)?.plate || '');
+    let finalTrailer = isManualTrailer ? manualTrailerPlate.trim().toUpperCase() : (vehicles.find(v => v.id === selectedTrailerId)?.plate || '');
+
+    if (!finalTractor) {
+      setErrorMsg('Por favor seleccione o ingrese la patente del tractor.');
+      return;
+    }
+
+    const carrierVal = cargoType === 'Otro' ? (customCargoType.trim() || 'Otro') : cargoType;
+    const nowISO = new Date().toISOString();
+
+    const newOpPayload = {
+      driver_id: finalDriverId,
+      driver: finalDriverName,
+      rut: finalRut,
+      phone: finalPhone,
+      tractor_plate: finalTractor,
+      trailer_plate: finalTrailer || null,
+      carrier: carrierVal,
+      type: 'Descarga' as const,
+      status: 'planta_carga' as const,
+      origin: 'planta_2' as const,
+      plant_loading_time: nowISO,
+      entry_time: nowISO,
+      patent: finalTractor
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from('yard_operations')
+        .insert([newOpPayload])
+        .select(`*, dock:dock_id ( name )`);
+
+      if (error) throw error;
+
+      if (data && data[0]) {
+        setTrucks(prev => [data[0], ...prev]);
+      }
+      setShowPlanta2AddModal(false);
+      
+      // Limpiar modal
+      setSelectedDriverId('');
+      setManualDriverName('');
+      setDriverRut('');
+      setDriverPhone('');
+      setSelectedTractorId('');
+      setManualTractorPlate('');
+      setIsManualTractor(false);
+      setSelectedTrailerId('');
+      setManualTrailerPlate('');
+      setIsManualTrailer(false);
+      setCargoType('Refrigerado');
+      setCustomCargoType('');
+      
+      fetchData();
+    } catch (err: any) {
+      console.error('Error ingresando despacho Planta 2:', err);
+      setErrorMsg('No se pudo registrar el despacho en Planta 2: ' + (err.message || ''));
+    }
+  };
+
+  // Mover camión de Cita o En Ruta a Patio (Espera)
   const handleMoveToYard = async (truckId: string) => {
     setErrorMsg(null);
     const nowISO = new Date().toISOString();
@@ -469,7 +616,13 @@ export default function App() {
     let dockToOccupy: string | null = null;
 
     if (currentStatus === 'espera') {
-      updateData = { status: 'cita' };
+      if (truck.origin === 'planta_2') {
+        updateData = { status: 'en_ruta' };
+      } else {
+        updateData = { status: 'cita' };
+      }
+    } else if (currentStatus === 'en_ruta') {
+      updateData = { status: 'planta_carga', dispatch_time: null };
     } else if (currentStatus === 'anden') {
       updateData = { 
         status: 'espera',
@@ -506,7 +659,7 @@ export default function App() {
         };
       }
     } else {
-      return; // Citas no se pueden retroceder más
+      return;
     }
 
     // UI Optimista
@@ -620,7 +773,7 @@ export default function App() {
     }
 
     // Avanzar hacia adelante
-    if (sourceStatus === 'cita' && targetStatus === 'espera') {
+    if ((sourceStatus === 'cita' || sourceStatus === 'en_ruta') && targetStatus === 'espera') {
       handleMoveToYard(truckId);
     } else if (sourceStatus === 'espera' && targetStatus === 'anden') {
       setDraggedTruckForDock(truck);
@@ -992,6 +1145,21 @@ export default function App() {
             <Monitor className="w-5 h-5 shrink-0" />
             Panel de Recepción
           </button>
+
+          <button 
+            onClick={() => setActiveTab('planta2')}
+            className={`flex items-center justify-between w-full px-4 py-3 rounded-xl text-sm font-bold transition-all duration-150 cursor-pointer ${activeTab === 'planta2' ? 'bg-white/15 text-white shadow-sm ring-1 ring-cyan-400/40' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
+          >
+            <div className="flex items-center gap-3">
+              <Factory className="w-5 h-5 shrink-0 text-cyan-300" />
+              <span>Despacho Planta 2</span>
+            </div>
+            {trucks.filter(t => t.origin === 'planta_2' && (t.status === 'planta_carga' || t.status === 'en_ruta')).length > 0 && (
+              <span className="bg-cyan-400 text-slate-950 text-[10px] px-2 py-0.5 rounded-full font-black animate-pulse shadow-sm">
+                {trucks.filter(t => t.origin === 'planta_2' && (t.status === 'planta_carga' || t.status === 'en_ruta')).length}
+              </span>
+            )}
+          </button>
           
           <button 
             onClick={() => setActiveTab('scheduler')}
@@ -1043,10 +1211,16 @@ export default function App() {
           <div className="flex flex-col justify-center">
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-extrabold text-slate-800 tracking-tight leading-none">
-                Monitoreo Activo de Patio
+                {activeTab === 'yard' && 'Monitoreo Activo de Patio'}
+                {activeTab === 'planta2' && 'Gestión Despacho Planta 2'}
+                {activeTab === 'scheduler' && 'Matriz de Agendamiento de Andenes'}
+                {activeTab === 'history' && 'Historial de Operaciones'}
+                {activeTab === 'reports' && 'Reportes & Métricas de Eficiencia'}
               </h1>
-              <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 text-[8px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded-full leading-none">
-                Vista Monitor
+              <span className={`text-[8px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded-full leading-none border ${
+                activeTab === 'planta2' ? 'bg-cyan-50 border-cyan-200 text-cyan-800' : 'bg-emerald-50 border-emerald-100 text-emerald-700'
+              }`}>
+                {activeTab === 'planta2' ? 'Planta 2' : 'Vista Monitor'}
               </span>
             </div>
             <div className="text-[10px] text-slate-500 font-semibold flex items-center gap-1 mt-1 leading-none">
@@ -1079,14 +1253,28 @@ export default function App() {
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
             
-            {/* Botón de Registrar Ingreso */}
-            <button 
-              onClick={handleOpenAddModal}
-              className="flex items-center gap-1 bg-[#0a5c36] hover:bg-[#08482a] text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-sm transition-all active:scale-95 cursor-pointer whitespace-nowrap"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Ingresar Camión / Cita
-            </button>
+            {/* Botón de Registrar Ingreso (según tab) */}
+            {activeTab === 'planta2' ? (
+              <button 
+                onClick={() => {
+                  const now = new Date();
+                  setScheduledEntryTime(formatLocalDatetime(now));
+                  setShowPlanta2AddModal(true);
+                }}
+                className="flex items-center gap-1.5 bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-800 hover:to-blue-800 text-white px-3.5 py-2 rounded-xl text-xs font-extrabold shadow-sm transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Ingresar Despacho Planta 2
+              </button>
+            ) : (
+              <button 
+                onClick={handleOpenAddModal}
+                className="flex items-center gap-1 bg-[#0a5c36] hover:bg-[#08482a] text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-sm transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Ingresar Camión / Cita
+              </button>
+            )}
           </div>
         </header>
 
@@ -1114,7 +1302,7 @@ export default function App() {
             /* Pestaña: Kanban Board para Monitor de 4 columnas */
             <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               
-              {/* 1. Columna: Citas para Hoy */}
+              {/* 1. Columna: Citas & En Ruta (Planta 2) */}
               <div 
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, 'cita')}
@@ -1123,23 +1311,37 @@ export default function App() {
                 <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-yellow-500"></span>
-                    <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Citas para Hoy</h3>
+                    <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Citas & En Ruta</h3>
                   </div>
                   <span className="bg-yellow-100 text-yellow-800 text-xs px-3 py-1 rounded-full font-bold shadow-sm">
-                    {filteredTrucks.filter(t => t.status === 'cita').length}
+                    {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta').length}
                   </span>
                 </div>
                 
                 <div className="space-y-4 flex-1 overflow-y-auto">
-                  {filteredTrucks.filter(t => t.status === 'cita')
+                  {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta')
                     .sort((a, b) => new Date(a.entry_time).getTime() - new Date(b.entry_time).getTime())
                     .map(truck => (
                     <div 
                       key={truck.id} 
                       draggable={true}
                       onDragStart={(e) => handleDragStart(e, truck.id, truck.status)}
-                      className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-slate-300 transition-all cursor-grab active:cursor-grabbing hover:shadow-md"
+                      className={`p-5 rounded-2xl space-y-3 shadow-sm transition-all cursor-grab active:cursor-grabbing hover:shadow-md border ${
+                        truck.status === 'en_ruta' 
+                          ? 'bg-gradient-to-b from-cyan-50/70 to-white border-2 border-cyan-400' 
+                          : 'bg-white border-slate-200 hover:border-slate-300'
+                      }`}
                     >
+                      {truck.status === 'en_ruta' && (
+                        <div className="bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-extrabold text-[10px] tracking-wider uppercase px-3 py-1 rounded-t-xl -mx-5 -mt-5 mb-2 flex items-center justify-between shadow-sm">
+                          <span className="flex items-center gap-1.5">
+                            <Truck className="w-3.5 h-3.5 animate-pulse text-cyan-200" />
+                            EN RUTA DESDE PLANTA 2
+                          </span>
+                          <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded font-black">Sin Cita</span>
+                        </div>
+                      )}
+
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex flex-wrap gap-1.5">
                           <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-extrabold tracking-wider">
@@ -1156,7 +1358,7 @@ export default function App() {
                               e.stopPropagation();
                               handleDeleteTruck(truck.id);
                             }}
-                            title="Eliminar cita"
+                            title="Eliminar registro"
                             className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1171,10 +1373,19 @@ export default function App() {
                         <p className="flex items-center gap-2"><User className="w-4 h-4 text-slate-400" /> <span className="font-bold text-slate-700">{truck.driver}</span></p>
                         <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
                         <p className="flex items-center gap-2"><Package className="w-4 h-4 text-slate-400" /> <span className="font-semibold text-slate-500">Carga:</span> <span className="text-slate-700 font-semibold">{truck.carrier}</span></p>
-                        <p className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-slate-400" /> 
-                          <span>Programado: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span>
-                        </p>
+                        
+                        {truck.status === 'en_ruta' ? (
+                          <p className="flex items-center gap-2 text-cyan-800 font-bold">
+                            <Clock className="w-4 h-4 text-cyan-600" /> 
+                            <span>Despachado P2: {truck.dispatch_time ? new Date(truck.dispatch_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : 'Reciente'}</span>
+                          </p>
+                        ) : (
+                          <p className="flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-slate-400" /> 
+                            <span>Programado: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span>
+                          </p>
+                        )}
+
                         {truck.scheduled_entry_time && truck.scheduled_end_time && (
                           <p className="text-[10px] text-[#0a5c36] font-bold pl-6">
                             Citación: {new Date(truck.scheduled_entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} - {new Date(truck.scheduled_end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
@@ -1182,19 +1393,30 @@ export default function App() {
                         )}
                       </div>
 
-                      <div className="pt-2">
+                      <div className="pt-2 space-y-1.5">
                         <button
                           onClick={() => handleMoveToYard(truck.id)}
                           className="flex items-center justify-center gap-2 bg-emerald-50 hover:bg-[#0a5c36] text-[#0a5c36] hover:text-white border border-[#0a5c36]/20 text-xs py-2.5 rounded-xl font-bold w-full transition-colors active:scale-98 cursor-pointer shadow-sm"
                         >
-                          Registrar Entrada Patio
+                          {truck.status === 'en_ruta' ? '📥 Registrar Llegada a Patio' : 'Registrar Entrada Patio'}
                           <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedTruckForTimeline(truck);
+                          }}
+                          className="flex items-center justify-center gap-1.5 text-[10px] text-slate-500 hover:text-slate-800 font-bold w-full py-1 cursor-pointer"
+                        >
+                          <Activity className="w-3 h-3 text-cyan-600" />
+                          Ver Trazabilidad
                         </button>
                       </div>
                     </div>
                   ))}
-                  {filteredTrucks.filter(t => t.status === 'cita').length === 0 && (
-                    <div className="text-center py-16 text-slate-400 text-sm font-semibold">No hay citas programadas</div>
+                  {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta').length === 0 && (
+                    <div className="text-center py-16 text-slate-400 text-sm font-semibold">No hay citas ni camiones en ruta</div>
                   )}
                 </div>
               </div>
@@ -1525,6 +1747,355 @@ export default function App() {
                 </div>
               </div>
 
+            </section>
+          ) : activeTab === 'planta2' ? (
+            
+            /* ====================================================
+               PESTAÑA: MÓDULO DESPACHO PLANTA 2
+               ==================================================== */
+            <section className="space-y-6">
+              
+              {/* Header Banner & KPIs Planta 2 */}
+              <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-[#08482a] text-white border border-slate-700/60 rounded-3xl p-6 shadow-xl relative overflow-hidden">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full flex items-center gap-1.5 shadow-inner">
+                        <Factory className="w-3.5 h-3.5" />
+                        Planta 2 — CiAL Alimentos
+                      </span>
+                    </div>
+                    <h2 className="text-2xl font-black tracking-tight text-white">
+                      Despacho y Control de Ruta Planta 2
+                    </h2>
+                    <p className="text-xs text-slate-300 font-medium max-w-2xl leading-relaxed">
+                      Gestión operativa de camiones en Planta 2. Registre despachos directo a ruta sin cita previa y realice el seguimiento continuo de tiempos hasta su arribo y descarga en el Centro de Distribución (Patio).
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      const now = new Date();
+                      setScheduledEntryTime(formatLocalDatetime(now));
+                      setShowPlanta2AddModal(true);
+                    }}
+                    className="flex items-center gap-2 bg-gradient-to-r from-cyan-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 text-slate-950 font-black text-xs px-5 py-3 rounded-2xl shadow-lg hover:shadow-cyan-400/25 transition-all active:scale-95 cursor-pointer shrink-0"
+                  >
+                    <Plus className="w-4 h-4 stroke-[3]" />
+                    Ingresar Despacho Planta 2
+                  </button>
+                </div>
+
+                {/* KPI Counters */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-6 border-t border-white/10">
+                  <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                    <div className="text-[10px] text-cyan-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                      <Factory className="w-3.5 h-3.5 text-cyan-400" />
+                      En Carga P2
+                    </div>
+                    <div className="text-2xl font-black text-white mt-1">
+                      {trucks.filter(t => t.origin === 'planta_2' && t.status === 'planta_carga').length}
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                    <div className="text-[10px] text-blue-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
+                      En Ruta a Patio
+                    </div>
+                    <div className="text-2xl font-black text-cyan-300 mt-1">
+                      {trucks.filter(t => t.origin === 'planta_2' && t.status === 'en_ruta').length}
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                    <div className="text-[10px] text-emerald-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                      En Patio CD
+                    </div>
+                    <div className="text-2xl font-black text-emerald-300 mt-1">
+                      {trucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden')).length}
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                    <div className="text-[10px] text-purple-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-purple-400" />
+                      Despachados Hoy
+                    </div>
+                    <div className="text-2xl font-black text-white mt-1">
+                      {trucks.filter(t => t.origin === 'planta_2' && t.status === 'completado').length}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Kanban Board Planta 2 (4 Columnas) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                
+                {/* 1. Columna: En Carga (Planta 2) */}
+                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-cyan-500"></span>
+                      <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">1. En Carga (Planta 2)</h3>
+                    </div>
+                    <span className="bg-cyan-100 text-cyan-800 text-xs px-3 py-1 rounded-full font-black shadow-sm">
+                      {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'planta_carga').length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4 flex-1 overflow-y-auto">
+                    {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'planta_carga')
+                      .sort((a, b) => new Date(b.entry_time).getTime() - new Date(a.entry_time).getTime())
+                      .map(truck => (
+                      <div 
+                        key={truck.id} 
+                        className="bg-white border border-cyan-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-cyan-400 transition-all hover:shadow-md relative overflow-hidden"
+                      >
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex flex-wrap gap-1.5">
+                            <span className="font-mono text-xs bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded text-cyan-900 font-black tracking-wider">
+                              TR: {truck.tractor_plate || 'S/T'}
+                            </span>
+                            <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 font-bold tracking-wider">
+                              R: {truck.trailer_plate || 'S/R'}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteTruck(truck.id)}
+                            title="Eliminar despacho"
+                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="text-xs space-y-1.5 text-slate-600 font-medium pt-1 border-t border-slate-100">
+                          <p className="flex items-center gap-2"><User className="w-4 h-4 text-slate-400" /> <span className="font-bold text-slate-800">{truck.driver}</span></p>
+                          <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
+                          <p className="flex items-center gap-2"><Package className="w-4 h-4 text-slate-400" /> <span className="font-semibold text-slate-500">Carga:</span> <span className="text-slate-700 font-semibold">{truck.carrier}</span></p>
+                          <p className="flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-cyan-600" /> 
+                            <span>Inicio Carga: {new Date(truck.plant_loading_time || truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span>
+                          </p>
+                        </div>
+
+                        <div className="pt-2 space-y-2">
+                          <button
+                            onClick={() => handleDispatchPlanta2(truck.id)}
+                            className="flex items-center justify-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white text-xs py-2.5 rounded-xl font-black w-full transition-all active:scale-98 cursor-pointer shadow-md shadow-cyan-600/20"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                            🚀 Despachar (En Ruta a CD)
+                          </button>
+                          <button
+                            onClick={() => setSelectedTruckForTimeline(truck)}
+                            className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 hover:text-slate-800 font-bold w-full py-1 cursor-pointer"
+                          >
+                            <Activity className="w-3.5 h-3.5 text-cyan-600" />
+                            Ver Trazabilidad
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'planta_carga').length === 0 && (
+                      <div className="text-center py-16 text-slate-400 text-xs font-semibold">No hay camiones en carga en Planta 2</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. Columna: En Ruta (Camino a Patio CD) */}
+                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></span>
+                      <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">2. En Ruta (Hacia CD)</h3>
+                    </div>
+                    <span className="bg-blue-100 text-blue-800 text-xs px-3 py-1 rounded-full font-black shadow-sm">
+                      {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'en_ruta').length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4 flex-1 overflow-y-auto">
+                    {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'en_ruta')
+                      .sort((a, b) => new Date(b.dispatch_time || b.entry_time).getTime() - new Date(a.dispatch_time || a.entry_time).getTime())
+                      .map(truck => (
+                      <div 
+                        key={truck.id} 
+                        className="bg-gradient-to-b from-blue-50/50 to-white border-2 border-blue-400/60 p-5 rounded-2xl space-y-3 shadow-md hover:border-blue-500 transition-all relative overflow-hidden"
+                      >
+                        <div className="bg-blue-600 text-white font-extrabold text-[10px] tracking-wider uppercase px-3 py-1 rounded-full flex items-center justify-between shadow-sm">
+                          <span className="flex items-center gap-1.5">
+                            <Truck className="w-3.5 h-3.5 animate-bounce" />
+                            EN CARRETERA / RUTA
+                          </span>
+                          <span className="text-[9px] opacity-90">Planta 2 ➔ CD</span>
+                        </div>
+
+                        <div className="flex justify-between items-start gap-2 pt-1">
+                          <div className="flex flex-wrap gap-1.5">
+                            <span className="font-mono text-xs bg-white border border-blue-200 px-2 py-0.5 rounded text-blue-900 font-black tracking-wider">
+                              TR: {truck.tractor_plate || 'S/T'}
+                            </span>
+                            <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 font-bold tracking-wider">
+                              R: {truck.trailer_plate || 'S/R'}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => handleRevertStatus(truck)}
+                            title="Regresar a En Carga"
+                            className="p-1 text-slate-400 hover:text-cyan-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="text-xs space-y-1.5 text-slate-600 font-medium pt-1 border-t border-blue-100">
+                          <p className="flex items-center gap-2"><User className="w-4 h-4 text-blue-600" /> <span className="font-bold text-slate-800">{truck.driver}</span></p>
+                          <p className="flex items-center gap-2"><Package className="w-4 h-4 text-slate-400" /> <span className="font-semibold text-slate-500">Carga:</span> <span className="text-slate-700 font-semibold">{truck.carrier}</span></p>
+                          <p className="flex items-center gap-2 text-blue-700 font-bold">
+                            <Clock className="w-4 h-4 text-blue-600" /> 
+                            <span>Despachado: {truck.dispatch_time ? new Date(truck.dispatch_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : 'Reciente'}</span>
+                          </p>
+                        </div>
+
+                        <div className="pt-2 space-y-2">
+                          <button
+                            onClick={() => handleMoveToYard(truck.id)}
+                            className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs py-2 rounded-xl font-bold w-full transition-all cursor-pointer shadow-sm"
+                          >
+                            <MapPin className="w-3.5 h-3.5" />
+                            📥 Registrar Llegada a Patio
+                          </button>
+                          <button
+                            onClick={() => setSelectedTruckForTimeline(truck)}
+                            className="flex items-center justify-center gap-1.5 text-[11px] text-blue-600 hover:text-blue-800 font-bold w-full py-1 cursor-pointer"
+                          >
+                            <Activity className="w-3.5 h-3.5" />
+                            Ver Trazabilidad
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'en_ruta').length === 0 && (
+                      <div className="text-center py-16 text-slate-400 text-xs font-semibold">No hay camiones en ruta actualmente</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 3. Columna: En Patio CD / Andén (Seguimiento P2) */}
+                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
+                      <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">3. En Patio / Andén</h3>
+                    </div>
+                    <span className="bg-emerald-100 text-emerald-800 text-xs px-3 py-1 rounded-full font-black shadow-sm">
+                      {filteredTrucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden')).length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4 flex-1 overflow-y-auto">
+                    {filteredTrucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden'))
+                      .sort((a, b) => new Date(b.entry_time).getTime() - new Date(a.entry_time).getTime())
+                      .map(truck => (
+                      <div 
+                        key={truck.id} 
+                        className="bg-white border border-emerald-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-emerald-400 transition-all"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-full border ${
+                            truck.status === 'anden' 
+                              ? 'bg-purple-100 text-purple-900 border-purple-300' 
+                              : 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                          }`}>
+                            {truck.status === 'anden' ? `🏗️ Operando: ${truck.dock?.name || 'Andén'}` : '⏳ Espera en Patio'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-bold">CD Central</span>
+                        </div>
+
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex flex-wrap gap-1.5">
+                            <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-extrabold tracking-wider">
+                              TR: {truck.tractor_plate || 'S/T'}
+                            </span>
+                            <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 font-bold tracking-wider">
+                              R: {truck.trailer_plate || 'S/R'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-xs space-y-1.5 text-slate-600 font-medium pt-1 border-t border-slate-100">
+                          <p className="flex items-center gap-2"><User className="w-4 h-4 text-slate-400" /> <span className="font-bold text-slate-800">{truck.driver}</span></p>
+                          <p className="flex items-center gap-2"><Clock className="w-4 h-4 text-emerald-600" /> <span>Llegada Patio: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span></p>
+                        </div>
+
+                        <button
+                          onClick={() => setSelectedTruckForTimeline(truck)}
+                          className="flex items-center justify-center gap-1.5 text-[11px] text-emerald-700 hover:text-emerald-900 font-bold w-full py-1 border-t border-slate-100 pt-2 cursor-pointer"
+                        >
+                          <Activity className="w-3.5 h-3.5" />
+                          Ver Trazabilidad Completa
+                        </button>
+                      </div>
+                    ))}
+                    {filteredTrucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden')).length === 0 && (
+                      <div className="text-center py-16 text-slate-400 text-xs font-semibold">No hay camiones de P2 en patio actualmente</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 4. Columna: Entregados / Completados */}
+                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-slate-400"></span>
+                      <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">4. Entregados P2</h3>
+                    </div>
+                    <span className="bg-slate-200 text-slate-800 text-xs px-3 py-1 rounded-full font-black shadow-sm">
+                      {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'completado').length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4 flex-1 overflow-y-auto">
+                    {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'completado')
+                      .sort((a, b) => new Date(b.end_time || b.entry_time).getTime() - new Date(a.end_time || a.entry_time).getTime())
+                      .map(truck => (
+                      <div 
+                        key={truck.id} 
+                        className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-slate-300 transition-all opacity-90"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] bg-slate-100 text-slate-700 font-extrabold uppercase px-2.5 py-0.5 rounded-full border border-slate-200">
+                            ✅ Finalizado
+                          </span>
+                          <span className="font-mono text-[10px] text-slate-400 font-bold">
+                            {truck.end_time ? new Date(truck.end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}
+                          </span>
+                        </div>
+
+                        <div className="text-xs space-y-1 text-slate-600 font-medium">
+                          <p className="font-bold text-slate-800">{truck.driver}</p>
+                          <p className="text-[11px] text-slate-500 font-mono">Tractor: {truck.tractor_plate}</p>
+                        </div>
+
+                        <button
+                          onClick={() => setSelectedTruckForTimeline(truck)}
+                          className="flex items-center justify-center gap-1.5 text-[11px] text-slate-600 hover:text-slate-900 font-bold w-full py-1 border-t border-slate-100 pt-2 cursor-pointer"
+                        >
+                          <Activity className="w-3.5 h-3.5 text-cyan-600" />
+                          Ver Trazabilidad de Tiempos
+                        </button>
+                      </div>
+                    ))}
+                    {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'completado').length === 0 && (
+                      <div className="text-center py-16 text-slate-400 text-xs font-semibold">No hay despachos de P2 finalizados hoy</div>
+                    )}
+                  </div>
+                </div>
+
+              </div>
             </section>
           ) : activeTab === 'scheduler' ? (
             
@@ -2500,6 +3071,461 @@ export default function App() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+      {/* Modal Ingresar Despacho Planta 2 */}
+      {showPlanta2AddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={() => setShowPlanta2AddModal(false)} />
+          
+          <form 
+            onSubmit={handleAddPlanta2Truck}
+            className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 w-full max-w-lg relative z-10 space-y-5 shadow-2xl text-slate-800 animate-fadeIn"
+          >
+            <div className="border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="bg-cyan-100 text-cyan-800 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-cyan-200">
+                  Planta 2
+                </span>
+                <span className="text-[10px] text-slate-400 font-bold">Ingreso Directo sin Cita</span>
+              </div>
+              <h3 className="font-extrabold text-xl text-slate-900 mt-1">Ingresar Despacho — Planta 2</h3>
+              <p className="text-xs text-slate-500 font-semibold">Registra el inicio de carga del camión en Planta 2 para envío a Patio CD.</p>
+            </div>
+
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+              
+              {/* Chofer */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Conductor / Chofer</label>
+                <select 
+                  value={selectedDriverId} 
+                  onChange={(e) => handleDriverChange(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36]"
+                  required
+                >
+                  <option value="">-- Seleccionar Chofer Registrado --</option>
+                  {drivers.map(d => (
+                    <option key={d.id} value={d.id}>{d.name} ({d.rut})</option>
+                  ))}
+                  <option value="manual">+ Ingresar Chofer Manualmente</option>
+                </select>
+
+                {selectedDriverId === 'manual' && (
+                  <div className="space-y-3 mt-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                    <input 
+                      type="text" 
+                      placeholder="Nombre Completo Chofer *"
+                      value={manualDriverName}
+                      onChange={(e) => setManualDriverName(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm w-full font-bold focus:outline-none focus:border-[#0a5c36]"
+                      required
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input 
+                        type="text" 
+                        placeholder="RUT Chofer"
+                        value={driverRut}
+                        onChange={(e) => setDriverRut(e.target.value)}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-[#0a5c36]"
+                      />
+                      <input 
+                        type="text" 
+                        placeholder="Teléfono Chofer"
+                        value={driverPhone}
+                        onChange={(e) => setDriverPhone(e.target.value)}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-[#0a5c36]"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Tractor */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Tractor (Patente)</label>
+                {!isManualTractor ? (
+                  <div className="flex gap-2">
+                    <select 
+                      value={selectedTractorId}
+                      onChange={(e) => setSelectedTractorId(e.target.value)}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm flex-1 text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36]"
+                      required
+                    >
+                      <option value="">-- Seleccionar Tractor --</option>
+                      {vehicles.filter(v => v.type === 'Tractor').map(v => (
+                        <option key={v.id} value={v.id}>{v.plate}</option>
+                      ))}
+                    </select>
+                    <button 
+                      type="button" 
+                      onClick={() => setIsManualTractor(true)} 
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer"
+                    >
+                      Manual
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="Ej: DRCX-73" 
+                      value={manualTractorPlate} 
+                      onChange={(e) => setManualTractorPlate(e.target.value)} 
+                      className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm flex-1 font-bold tracking-wider uppercase focus:outline-none focus:border-[#0a5c36]" 
+                      required 
+                    />
+                    <button 
+                      type="button" 
+                      onClick={() => setIsManualTractor(false)} 
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer"
+                    >
+                      Lista
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Rampla */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Rampla (Opcional)</label>
+                {!isManualTrailer ? (
+                  <div className="flex gap-2">
+                    <select 
+                      value={selectedTrailerId}
+                      onChange={(e) => setSelectedTrailerId(e.target.value)}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm flex-1 text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36]"
+                    >
+                      <option value="">-- Sin Rampla / Seleccionar --</option>
+                      {vehicles.filter(v => v.type === 'Rampla').map(v => (
+                        <option key={v.id} value={v.id}>{v.plate}</option>
+                      ))}
+                    </select>
+                    <button 
+                      type="button" 
+                      onClick={() => setIsManualTrailer(true)} 
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer"
+                    >
+                      Manual
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="Ej: PWWK-59" 
+                      value={manualTrailerPlate} 
+                      onChange={(e) => setManualTrailerPlate(e.target.value)} 
+                      className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm flex-1 font-bold tracking-wider uppercase focus:outline-none focus:border-[#0a5c36]" 
+                    />
+                    <button 
+                      type="button" 
+                      onClick={() => setIsManualTrailer(false)} 
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer"
+                    >
+                      Lista
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Tipo de Carga */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Tipo de Carga</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {['Semi Elaborado', 'Refrigerado', 'Congelado', 'Otro'].map(type => (
+                    <button 
+                      type="button"
+                      key={type}
+                      onClick={() => setCargoType(type)}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer ${cargoType === type ? 'bg-cyan-50 border-cyan-300 text-cyan-900 font-extrabold shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                    >
+                      {type}
+                    </button>
+                  ))}
+                </div>
+                {cargoType === 'Otro' && (
+                  <input 
+                    type="text" 
+                    placeholder="Especifique tipo de carga..."
+                    value={customCargoType}
+                    onChange={(e) => setCustomCargoType(e.target.value)}
+                    className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm w-full text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#0a5c36] mt-2"
+                    required={cargoType === 'Otro'}
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="pt-4 flex gap-3 border-t border-slate-100">
+              <button 
+                type="button"
+                onClick={() => setShowPlanta2AddModal(false)}
+                className="bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-bold flex-1 transition-colors hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                className="bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-cyan-600/20"
+              >
+                🏭 Registrar Carga Planta 2
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal Trazabilidad & Timeline de Tiempos del Camión */}
+      {selectedTruckForTimeline && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div 
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-md transition-opacity" 
+            onClick={() => setSelectedTruckForTimeline(null)}
+          />
+          
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 w-full max-w-2xl relative z-10 space-y-6 shadow-2xl text-slate-800 animate-fadeIn">
+            {/* Header Modal */}
+            <div className="flex items-start justify-between border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-full border ${
+                    selectedTruckForTimeline.origin === 'planta_2' 
+                      ? 'bg-cyan-50 text-cyan-800 border-cyan-200' 
+                      : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  }`}>
+                    {selectedTruckForTimeline.origin === 'planta_2' ? '🏭 Origen: Planta 2' : '🏢 Origen: Patio CD Directo'}
+                  </span>
+                  <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+                    ID: {selectedTruckForTimeline.id.slice(0, 8)}
+                  </span>
+                </div>
+                <h3 className="font-extrabold text-xl text-slate-900 mt-2">
+                  Trazabilidad de Tiempos del Camión
+                </h3>
+                <p className="text-xs text-slate-500 font-semibold">
+                  Seguimiento del comportamiento operativo y tiempos transcurridos en cada etapa
+                </p>
+              </div>
+
+              <button
+                onClick={() => setSelectedTruckForTimeline(null)}
+                className="text-slate-400 hover:text-slate-600 p-2 rounded-xl hover:bg-slate-100 transition-colors font-bold text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Ficha Resumen Camión */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs">
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Chofer</span>
+                <span className="font-extrabold text-slate-800">{selectedTruckForTimeline.driver}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Tractor / Rampla</span>
+                <span className="font-mono font-extrabold text-slate-800">
+                  {selectedTruckForTimeline.tractor_plate || '—'} / {selectedTruckForTimeline.trailer_plate || '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Carga</span>
+                <span className="font-bold text-slate-700">{selectedTruckForTimeline.carrier}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Estado Actual</span>
+                <span className="font-extrabold text-[#0a5c36] uppercase">{selectedTruckForTimeline.status}</span>
+              </div>
+            </div>
+
+            {/* Visual Timeline (Línea de Tiempo Operativa) */}
+            <div className="space-y-4 pt-2">
+              <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                <Clock className="w-4 h-4 text-[#0a5c36]" />
+                Línea de Tiempo de Operación
+              </h4>
+
+              <div className="relative pl-6 space-y-6 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
+                
+                {/* 1. Inicio Carga en Planta 2 */}
+                {selectedTruckForTimeline.origin === 'planta_2' && (
+                  <div className="relative">
+                    <div className="absolute -left-6 top-1.5 w-5 h-5 rounded-full bg-cyan-500 text-white flex items-center justify-center text-[10px] font-black shadow-sm">
+                      1
+                    </div>
+                    <div className="bg-cyan-50/60 border border-cyan-200 p-3.5 rounded-2xl flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-cyan-900 flex items-center gap-1.5">
+                          <Factory className="w-3.5 h-3.5 text-cyan-600" />
+                          Inicio Carga en Planta 2
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {selectedTruckForTimeline.plant_loading_time || selectedTruckForTimeline.entry_time
+                            ? new Date(selectedTruckForTimeline.plant_loading_time || selectedTruckForTimeline.entry_time).toLocaleString('es-CL')
+                            : '—'}
+                        </div>
+                      </div>
+                      {selectedTruckForTimeline.dispatch_time && (
+                        <div className="text-right">
+                          <span className="text-[10px] text-cyan-700 font-bold block">Tiempo Carga P2</span>
+                          <span className="text-xs font-black text-cyan-900">
+                            {formatDurationMs(new Date(selectedTruckForTimeline.dispatch_time).getTime() - new Date(selectedTruckForTimeline.plant_loading_time || selectedTruckForTimeline.entry_time).getTime())}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Despacho Salida Planta 2 */}
+                {selectedTruckForTimeline.origin === 'planta_2' && (
+                  <div className="relative">
+                    <div className={`absolute -left-6 top-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm ${
+                      selectedTruckForTimeline.dispatch_time ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'
+                    }`}>
+                      2
+                    </div>
+                    <div className={`p-3.5 rounded-2xl border flex items-center justify-between ${
+                      selectedTruckForTimeline.dispatch_time ? 'bg-blue-50/60 border-blue-200' : 'bg-slate-50 border-slate-200 opacity-60'
+                    }`}>
+                      <div>
+                        <div className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+                          <Send className="w-3.5 h-3.5 text-blue-600" />
+                          Despachado (Salida Planta 2 en Ruta)
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {selectedTruckForTimeline.dispatch_time
+                            ? new Date(selectedTruckForTimeline.dispatch_time).toLocaleString('es-CL')
+                            : 'Pendiente de despacho'}
+                        </div>
+                      </div>
+                      {selectedTruckForTimeline.dispatch_time && selectedTruckForTimeline.status !== 'en_ruta' && (
+                        <div className="text-right">
+                          <span className="text-[10px] text-blue-700 font-bold block">Tiempo en Ruta</span>
+                          <span className="text-xs font-black text-blue-900">
+                            {formatDurationMs(new Date(selectedTruckForTimeline.entry_time).getTime() - new Date(selectedTruckForTimeline.dispatch_time).getTime())}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Llegada a Patio CD */}
+                <div className="relative">
+                  <div className={`absolute -left-6 top-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm ${
+                    selectedTruckForTimeline.status !== 'cita' && selectedTruckForTimeline.status !== 'planta_carga' && selectedTruckForTimeline.status !== 'en_ruta'
+                      ? 'bg-emerald-600 text-white' 
+                      : 'bg-slate-200 text-slate-500'
+                  }`}>
+                    {selectedTruckForTimeline.origin === 'planta_2' ? '3' : '1'}
+                  </div>
+                  <div className={`p-3.5 rounded-2xl border flex items-center justify-between ${
+                    selectedTruckForTimeline.status !== 'cita' && selectedTruckForTimeline.status !== 'planta_carga' && selectedTruckForTimeline.status !== 'en_ruta'
+                      ? 'bg-emerald-50/60 border-emerald-200' 
+                      : 'bg-slate-50 border-slate-200 opacity-60'
+                  }`}>
+                    <div>
+                      <div className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                        Llegada Registrada a Patio CD
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {selectedTruckForTimeline.status !== 'cita' && selectedTruckForTimeline.status !== 'planta_carga' && selectedTruckForTimeline.status !== 'en_ruta'
+                          ? new Date(selectedTruckForTimeline.entry_time).toLocaleString('es-CL')
+                          : 'En tránsito o pendiente de llegada'}
+                      </div>
+                    </div>
+                    {selectedTruckForTimeline.start_time && (
+                      <div className="text-right">
+                        <span className="text-[10px] text-emerald-700 font-bold block">Tiempo Espera Patio</span>
+                        <span className="text-xs font-black text-emerald-900">
+                          {formatDurationMs(new Date(selectedTruckForTimeline.start_time).getTime() - new Date(selectedTruckForTimeline.entry_time).getTime())}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 4. Inicio Descarga en Andén */}
+                <div className="relative">
+                  <div className={`absolute -left-6 top-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm ${
+                    selectedTruckForTimeline.start_time ? 'bg-purple-600 text-white' : 'bg-slate-200 text-slate-500'
+                  }`}>
+                    {selectedTruckForTimeline.origin === 'planta_2' ? '4' : '2'}
+                  </div>
+                  <div className={`p-3.5 rounded-2xl border flex items-center justify-between ${
+                    selectedTruckForTimeline.start_time ? 'bg-purple-50/60 border-purple-200' : 'bg-slate-50 border-slate-200 opacity-60'
+                  }`}>
+                    <div>
+                      <div className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5 text-purple-600" />
+                        Inicio de Descarga en {selectedTruckForTimeline.dock?.name || 'Andén'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {selectedTruckForTimeline.start_time
+                          ? new Date(selectedTruckForTimeline.start_time).toLocaleString('es-CL')
+                          : 'Pendiente de asignación a andén'}
+                      </div>
+                    </div>
+                    {selectedTruckForTimeline.end_time && selectedTruckForTimeline.start_time && (
+                      <div className="text-right">
+                        <span className="text-[10px] text-purple-700 font-bold block">Tiempo Descarga</span>
+                        <span className="text-xs font-black text-purple-900">
+                          {formatDurationMs(new Date(selectedTruckForTimeline.end_time).getTime() - new Date(selectedTruckForTimeline.start_time).getTime())}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 5. Término Descarga & Salida */}
+                <div className="relative">
+                  <div className={`absolute -left-6 top-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm ${
+                    selectedTruckForTimeline.end_time ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-500'
+                  }`}>
+                    {selectedTruckForTimeline.origin === 'planta_2' ? '5' : '3'}
+                  </div>
+                  <div className={`p-3.5 rounded-2xl border flex items-center justify-between ${
+                    selectedTruckForTimeline.end_time ? 'bg-slate-100 border-slate-300' : 'bg-slate-50 border-slate-200 opacity-60'
+                  }`}>
+                    <div>
+                      <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-slate-700" />
+                        Término de Operación & Salida
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {selectedTruckForTimeline.end_time
+                          ? new Date(selectedTruckForTimeline.end_time).toLocaleString('es-CL')
+                          : 'En proceso'}
+                      </div>
+                    </div>
+                    {selectedTruckForTimeline.end_time && (
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-600 font-bold block">Ciclo Total</span>
+                        <span className="text-xs font-black text-slate-900">
+                          {formatDurationMs(
+                            new Date(selectedTruckForTimeline.end_time).getTime() - 
+                            new Date(selectedTruckForTimeline.plant_loading_time || selectedTruckForTimeline.entry_time).getTime()
+                          )}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setSelectedTruckForTimeline(null)}
+                className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-md"
+              >
+                Cerrar Trazabilidad
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

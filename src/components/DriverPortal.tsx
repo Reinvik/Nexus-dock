@@ -24,7 +24,10 @@ interface YardOperation {
   driver: string;
   carrier: string;
   type: 'Carga' | 'Descarga';
-  status: 'cita' | 'espera' | 'anden' | 'completado';
+  status: 'cita' | 'planta_carga' | 'en_ruta' | 'espera' | 'anden' | 'completado';
+  origin?: 'planta_2' | 'patio_cd' | null;
+  dispatch_time?: string | null;
+  plant_loading_time?: string | null;
   dock_id: string | null;
   entry_time: string;
   scheduled_entry_time?: string | null;
