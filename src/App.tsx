@@ -116,7 +116,7 @@ const formatWhatsAppUrl = (phone: string | null | undefined, driverName: string,
     cleanPhone = `56${cleanPhone}`;
   }
 
-  const msg = encodeURIComponent(`Hola ${driverName}, te contactamos desde Control de Recepción CiAL Alimentos sobre tu camión patente ${tractorPlate || ''}.`);
+  const msg = encodeURIComponent(`Hola ${driverName}, te contactamos desde Control Inbound CiAL Alimentos sobre tu camión patente ${tractorPlate || ''}.`);
   return `https://wa.me/${cleanPhone}?text=${msg}`;
 };
 
@@ -1333,7 +1333,7 @@ export default function App() {
           />
           <div>
             <h2 className="text-sm font-extrabold tracking-wider leading-none">Control</h2>
-            <span className="text-xs text-emerald-300 font-semibold tracking-wide uppercase">Recepción</span>
+            <span className="text-xs text-emerald-300 font-semibold tracking-wide uppercase">Inbound</span>
           </div>
         </div>
 
@@ -1344,7 +1344,7 @@ export default function App() {
             className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl text-sm font-bold transition-all duration-150 cursor-pointer ${activeTab === 'yard' ? 'bg-white/15 text-white shadow-sm' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
           >
             <Monitor className="w-5 h-5 shrink-0" />
-            Panel de Recepción
+            Panel Inbound
           </button>
 
           <button 

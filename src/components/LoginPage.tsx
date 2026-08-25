@@ -181,7 +181,7 @@ export default function LoginPage({ onDriverClick }: { onDriverClick: () => void
               />
               <div className="text-left">
                 <h1 className="text-white font-extrabold text-lg leading-none tracking-tight">Control</h1>
-                <span className="text-emerald-200 font-bold text-xs tracking-widest uppercase leading-none">Recepción</span>
+                <span className="text-emerald-200 font-bold text-xs tracking-widest uppercase leading-none">Inbound</span>
               </div>
             </div>
             
@@ -458,7 +458,7 @@ export default function LoginPage({ onDriverClick }: { onDriverClick: () => void
 
         {/* Versión */}
         <p className="text-center text-white/40 text-[10px] font-bold tracking-wider mt-4 uppercase">
-          Nexus Dock v2.0 · Control Recepción
+          Nexus Dock v2.0 · Control Inbound
         </p>
       </div>
     </div>
