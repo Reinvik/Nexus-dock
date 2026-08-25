@@ -312,28 +312,90 @@ export default function App() {
     setIsCitaEntry(false);
     setShowAddModal(true);
   };
+   // Guardar automáticamente perfiles de Chofer y Vehículos si fueron ingresados manualmente
+  const ensureDriverAndVehiclesSaved = async (
+    driverName: string,
+    rut: string | null,
+    phone: string | null,
+    tractorPlate: string | null,
+    trailerPlate: string | null,
+    isManualDriver: boolean
+  ): Promise<string | null> => {
+    let finalId: string | null = null;
+
+    try {
+      // 1. Guardar Tractor en vehicles si es nuevo
+      if (tractorPlate && tractorPlate.trim()) {
+        const cleanTractor = tractorPlate.trim().toUpperCase();
+        const exists = vehicles.some(v => v.plate === cleanTractor && v.type === 'Tractor');
+        if (!exists) {
+          const { data: newVhc } = await supabase
+            .from('vehicles')
+            .insert([{ plate: cleanTractor, type: 'Tractor' }])
+            .select();
+          if (newVhc && newVhc[0]) {
+            setVehicles(prev => [...prev, newVhc[0]]);
+          }
+        }
+      }
+
+      // 2. Guardar Rampla en vehicles si es nueva
+      if (trailerPlate && trailerPlate.trim()) {
+        const cleanTrailer = trailerPlate.trim().toUpperCase();
+        const exists = vehicles.some(v => v.plate === cleanTrailer && v.type === 'Rampla');
+        if (!exists) {
+          const { data: newTrl } = await supabase
+            .from('vehicles')
+            .insert([{ plate: cleanTrailer, type: 'Rampla' }])
+            .select();
+          if (newTrl && newTrl[0]) {
+            setVehicles(prev => [...prev, newTrl[0]]);
+          }
+        }
+      }
+
+      // 3. Guardar nuevo chofer en drivers si fue ingresado manualmente
+      if (isManualDriver && driverName && driverName.trim()) {
+        const cleanName = driverName.trim();
+        const cleanRut = rut ? rut.trim() : 'S/RUT';
+        const cleanPhone = phone ? phone.trim() : '';
+
+        // Verificar si ya existe por RUT o Nombre
+        const existing = drivers.find(d => 
+          (d.rut && d.rut !== 'S/RUT' && d.rut.toLowerCase() === cleanRut.toLowerCase()) ||
+          d.name.toLowerCase() === cleanName.toLowerCase()
+        );
+
+        if (existing) {
+          finalId = existing.id;
+        } else {
+          const { data: newDrv, error: dErr } = await supabase
+            .from('drivers')
+            .insert([{
+              name: cleanName,
+              rut: cleanRut,
+              phone: cleanPhone || null,
+              default_tractor: tractorPlate ? tractorPlate.trim().toUpperCase() : null,
+              default_trailer: trailerPlate ? trailerPlate.trim().toUpperCase() : null
+            }])
+            .select();
+
+          if (!dErr && newDrv && newDrv[0]) {
+            finalId = newDrv[0].id;
+            setDrivers(prev => [...prev, newDrv[0]]);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Advertencia al guardar perfil de chofer o vehículos:', err);
+    }
+
+    return finalId;
+  };
 
   const handleAddTruck = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-
-    let finalDriverName = '';
-    let finalDriverId: string | null = null;
-
-    if (selectedDriverId === 'manual') {
-      finalDriverName = manualDriverName.trim();
-    } else {
-      const drv = drivers.find(d => d.id === selectedDriverId);
-      if (drv) {
-        finalDriverName = drv.name;
-        finalDriverId = drv.id;
-      }
-    }
-
-    if (!finalDriverName) {
-      setErrorMsg('Por favor selecciona o ingresa un conductor.');
-      return;
-    }
 
     let finalTractor = '';
     if (isManualTractor) {
@@ -349,6 +411,47 @@ export default function App() {
     } else {
       const vhc = vehicles.find(v => v.id === selectedTrailerId);
       if (vhc) finalTrailer = vhc.plate;
+    }
+
+    let finalDriverName = '';
+    let finalDriverId: string | null = null;
+
+    if (selectedDriverId === 'manual') {
+      if (!manualDriverName.trim()) {
+        setErrorMsg('Por favor ingrese el nombre del conductor.');
+        return;
+      }
+      finalDriverName = manualDriverName.trim();
+      
+      const savedId = await ensureDriverAndVehiclesSaved(
+        finalDriverName,
+        driverRut,
+        driverPhone,
+        finalTractor,
+        finalTrailer,
+        true
+      );
+      if (savedId) finalDriverId = savedId;
+    } else {
+      const drv = drivers.find(d => d.id === selectedDriverId);
+      if (drv) {
+        finalDriverName = drv.name;
+        finalDriverId = drv.id;
+
+        await ensureDriverAndVehiclesSaved(
+          finalDriverName,
+          driverRut,
+          driverPhone,
+          finalTractor,
+          finalTrailer,
+          false
+        );
+      }
+    }
+
+    if (!finalDriverName) {
+      setErrorMsg('Por favor selecciona o ingresa un conductor.');
+      return;
     }
 
     if (!finalTractor) {
@@ -486,6 +589,14 @@ export default function App() {
     e.preventDefault();
     setErrorMsg(null);
 
+    let finalTractor = isManualTractor ? manualTractorPlate.trim().toUpperCase() : (vehicles.find(v => v.id === selectedTractorId)?.plate || '');
+    let finalTrailer = isManualTrailer ? manualTrailerPlate.trim().toUpperCase() : (vehicles.find(v => v.id === selectedTrailerId)?.plate || '');
+
+    if (!finalTractor) {
+      setErrorMsg('Por favor seleccione o ingrese la patente del tractor.');
+      return;
+    }
+
     let finalDriverName = '';
     let finalDriverId: string | null = null;
     let finalRut: string | null = null;
@@ -499,6 +610,16 @@ export default function App() {
       finalDriverName = manualDriverName.trim();
       finalRut = driverRut.trim() || null;
       finalPhone = driverPhone.trim() || null;
+
+      const savedId = await ensureDriverAndVehiclesSaved(
+        finalDriverName,
+        finalRut,
+        finalPhone,
+        finalTractor,
+        finalTrailer,
+        true
+      );
+      if (savedId) finalDriverId = savedId;
     } else {
       const driverObj = drivers.find(d => d.id === selectedDriverId);
       if (!driverObj) {
@@ -509,14 +630,15 @@ export default function App() {
       finalDriverId = driverObj.id;
       finalRut = driverObj.rut;
       finalPhone = driverObj.phone;
-    }
 
-    let finalTractor = isManualTractor ? manualTractorPlate.trim().toUpperCase() : (vehicles.find(v => v.id === selectedTractorId)?.plate || '');
-    let finalTrailer = isManualTrailer ? manualTrailerPlate.trim().toUpperCase() : (vehicles.find(v => v.id === selectedTrailerId)?.plate || '');
-
-    if (!finalTractor) {
-      setErrorMsg('Por favor seleccione o ingrese la patente del tractor.');
-      return;
+      await ensureDriverAndVehiclesSaved(
+        finalDriverName,
+        finalRut,
+        finalPhone,
+        finalTractor,
+        finalTrailer,
+        false
+      );
     }
 
     const carrierVal = cargoType === 'Otro' ? (customCargoType.trim() || 'Otro') : cargoType;
