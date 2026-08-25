@@ -2193,7 +2193,25 @@ export default function App() {
                         </div>
 
                         <div className="text-xs space-y-1.5 text-slate-600 font-medium pt-1 border-t border-slate-100">
-                          <p className="flex items-center gap-2"><User className="w-4 h-4 text-slate-400" /> <span className="font-bold text-slate-800">{truck.driver}</span></p>
+                          <div className="flex items-center justify-between gap-1">
+                            <p className="flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap">
+                              <User className="w-4 h-4 text-slate-400 shrink-0" /> 
+                              <span className="font-bold text-slate-800">{truck.driver}</span>
+                            </p>
+                            {truck.phone && (
+                              <a
+                                href={formatWhatsAppUrl(truck.phone, truck.driver, truck.tractor_plate) || '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 bg-[#25D366] hover:bg-[#128C7E] text-white px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shadow-xs shrink-0"
+                                title={`Hablar por WhatsApp con ${truck.driver} (${truck.phone})`}
+                              >
+                                <MessageSquare className="w-3 h-3 fill-current" />
+                                <span>WSP</span>
+                              </a>
+                            )}
+                          </div>
                           <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
                           <p className="flex items-center gap-2"><Package className="w-4 h-4 text-slate-400" /> <span className="font-semibold text-slate-500">Carga:</span> <span className="text-slate-700 font-semibold">{truck.carrier}</span></p>
                           <p className="flex items-center gap-2">
@@ -2273,7 +2291,26 @@ export default function App() {
                         </div>
 
                         <div className="text-xs space-y-1.5 text-slate-600 font-medium pt-1 border-t border-blue-100">
-                          <p className="flex items-center gap-2"><User className="w-4 h-4 text-blue-600" /> <span className="font-bold text-slate-800">{truck.driver}</span></p>
+                          <div className="flex items-center justify-between gap-1">
+                            <p className="flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap">
+                              <User className="w-4 h-4 text-blue-600 shrink-0" /> 
+                              <span className="font-bold text-slate-800">{truck.driver}</span>
+                            </p>
+                            {truck.phone && (
+                              <a
+                                href={formatWhatsAppUrl(truck.phone, truck.driver, truck.tractor_plate) || '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 bg-[#25D366] hover:bg-[#128C7E] text-white px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shadow-xs shrink-0"
+                                title={`Hablar por WhatsApp con ${truck.driver} (${truck.phone})`}
+                              >
+                                <MessageSquare className="w-3 h-3 fill-current" />
+                                <span>WSP</span>
+                              </a>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
                           <p className="flex items-center gap-2"><Package className="w-4 h-4 text-slate-400" /> <span className="font-semibold text-slate-500">Carga:</span> <span className="text-slate-700 font-semibold">{truck.carrier}</span></p>
                           <p className="flex items-center gap-2 text-blue-700 font-bold">
                             <Clock className="w-4 h-4 text-blue-600" /> 
@@ -2348,7 +2385,26 @@ export default function App() {
                         </div>
 
                         <div className="text-xs space-y-1.5 text-slate-600 font-medium pt-1 border-t border-slate-100">
-                          <p className="flex items-center gap-2"><User className="w-4 h-4 text-slate-400" /> <span className="font-bold text-slate-800">{truck.driver}</span></p>
+                          <div className="flex items-center justify-between gap-1">
+                            <p className="flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap">
+                              <User className="w-4 h-4 text-slate-400 shrink-0" /> 
+                              <span className="font-bold text-slate-800">{truck.driver}</span>
+                            </p>
+                            {truck.phone && (
+                              <a
+                                href={formatWhatsAppUrl(truck.phone, truck.driver, truck.tractor_plate) || '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 bg-[#25D366] hover:bg-[#128C7E] text-white px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shadow-xs shrink-0"
+                                title={`Hablar por WhatsApp con ${truck.driver} (${truck.phone})`}
+                              >
+                                <MessageSquare className="w-3 h-3 fill-current" />
+                                <span>WSP</span>
+                              </a>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
                           <p className="flex items-center gap-2"><Clock className="w-4 h-4 text-emerald-600" /> <span>Llegada Patio: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span></p>
                         </div>
 
@@ -2416,7 +2472,20 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {truck.phone && (
+                            <a
+                              href={formatWhatsAppUrl(truck.phone, truck.driver, truck.tractor_plate) || '#'}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 bg-[#25D366] hover:bg-[#128C7E] text-white px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shadow-xs"
+                              title={`Hablar por WhatsApp con ${truck.driver} (${truck.phone})`}
+                            >
+                              <MessageSquare className="w-3 h-3 fill-current" />
+                              <span>WSP</span>
+                            </a>
+                          )}
                           <button
                             type="button"
                             onClick={(e) => {
