@@ -29,7 +29,8 @@ import {
   ChevronDown,
   Thermometer,
   Snowflake,
-  SlidersHorizontal
+  SlidersHorizontal,
+  UtensilsCrossed
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -44,6 +45,32 @@ export interface ScheduleRestriction {
   restriction_type: RestrictionType;
   note?: string;
 }
+
+export interface ScheduleRecurringRule {
+  id?: string;
+  day_of_week: number; // 0=Dom, 1=Lun, 2=Mar, 3=Mie, 4=Jue, 5=Vie, 6=Sab
+  hour: number;
+  dock_id?: string | null;
+  restriction_type: RestrictionType;
+  note?: string;
+  is_active?: boolean;
+}
+
+export const INITIAL_RECURRING_RULES: ScheduleRecurringRule[] = [
+  // Lunes: 11 y 12 no se recibe ni congelado ni refrigerado (Bloqueado)
+  { day_of_week: 1, hour: 11, dock_id: null, restriction_type: 'bloqueado', note: 'No se recibe ni congelado ni refrigerado' },
+  { day_of_week: 1, hour: 12, dock_id: null, restriction_type: 'bloqueado', note: 'No se recibe ni congelado ni refrigerado' },
+  // Martes: 11 no se recibe congelado (Solo Refrigerado)
+  { day_of_week: 2, hour: 11, dock_id: null, restriction_type: 'refrigerado', note: 'Solo refrigerado (No congelado)' },
+  // Miércoles: 11 y 12 no se recibe refrigerado (Solo Congelado)
+  { day_of_week: 3, hour: 11, dock_id: null, restriction_type: 'congelado', note: 'Solo congelado (No refrigerado)' },
+  { day_of_week: 3, hour: 12, dock_id: null, restriction_type: 'congelado', note: 'Solo congelado (No refrigerado)' },
+  // Jueves: 11 no se recibe congelado (Solo Refrigerado)
+  { day_of_week: 4, hour: 11, dock_id: null, restriction_type: 'refrigerado', note: 'Solo refrigerado (No congelado)' },
+  // Viernes: 11 y 12 no se recibe refrigerado (Solo Congelado)
+  { day_of_week: 5, hour: 11, dock_id: null, restriction_type: 'congelado', note: 'Solo congelado (No refrigerado)' },
+  { day_of_week: 5, hour: 12, dock_id: null, restriction_type: 'congelado', note: 'Solo congelado (No refrigerado)' },
+];
 
 interface Dock {
   id: string;
@@ -218,6 +245,40 @@ export default function App() {
   const [restrictionTypeSelected, setRestrictionTypeSelected] = useState<RestrictionType>('congelado');
   const [restrictionNote, setRestrictionNote] = useState<string>('');
   const [savingRestriction, setSavingRestriction] = useState(false);
+
+  // States para Reglas Semanales Recurrentes y Hora de Almuerzo
+  const [recurringRules, setRecurringRules] = useState<ScheduleRecurringRule[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('nexus_schedule_recurring_rules');
+      if (saved) {
+        try { return JSON.parse(saved); } catch {}
+      }
+    }
+    return INITIAL_RECURRING_RULES;
+  });
+
+  const [lunchBreakConfig, setLunchBreakConfig] = useState<{
+    enabled: boolean;
+    hour: number;
+    docks: 'todos' | string;
+    days: number[]; // e.g. [1, 2, 3, 4, 5] (Lunes a Viernes)
+  }>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('nexus_lunch_break_config');
+      if (saved) {
+        try { return JSON.parse(saved); } catch {}
+      }
+    }
+    return { enabled: true, hour: 13, docks: 'todos', days: [1, 2, 3, 4, 5] };
+  });
+
+  const [showRecurringModal, setShowRecurringModal] = useState(false);
+  const [recurringModalTab, setRecurringModalTab] = useState<'semanal' | 'almuerzo'>('semanal');
+  const [selectedDayTab, setSelectedDayTab] = useState<number>(1); // 1=Lunes
+  const [newRuleHour, setNewRuleHour] = useState<number>(11);
+  const [newRuleType, setNewRuleType] = useState<RestrictionType>('congelado');
+  const [newRuleDockId, setNewRuleDockId] = useState<string>('todos');
+  const [newRuleNote, setNewRuleNote] = useState<string>('');
   
   // States para Historial de Operaciones
   const [historySearch, setHistorySearch] = useState('');
@@ -321,7 +382,7 @@ export default function App() {
 
       if (vehiclesError) throw vehiclesError;
 
-      // Cargar restricciones de bloques
+      // Cargar restricciones de bloques por fecha
       try {
         const { data: restData } = await supabase.from('schedule_restrictions').select('*');
         if (restData && restData.length > 0) {
@@ -332,6 +393,19 @@ export default function App() {
         }
       } catch (e) {
         console.warn('Error menor al cargar schedule_restrictions:', e);
+      }
+
+      // Cargar reglas recurrentes semanales
+      try {
+        const { data: recData } = await supabase.from('schedule_recurring_rules').select('*');
+        if (recData && recData.length > 0) {
+          setRecurringRules(recData);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('nexus_schedule_recurring_rules', JSON.stringify(recData));
+          }
+        }
+      } catch (e) {
+        console.warn('Error menor al cargar schedule_recurring_rules:', e);
       }
 
       setDocks(docksData || []);
@@ -348,11 +422,123 @@ export default function App() {
 
   const getRestrictionForSlot = (dockId: string, hour: number, date: Date): ScheduleRestriction | null => {
     const dateStr = date.toISOString().split('T')[0];
+    const dayOfWeek = date.getDay(); // 0=Dom, 1=Lun, 2=Mar, 3=Mie, 4=Jue, 5=Vie, 6=Sab
+
+    // 1. Prioridad: Verificar si hay anulación explícita para esta fecha y hora exacta
     const specific = scheduleRestrictions.find(r => r.schedule_date === dateStr && r.hour === hour && r.dock_id === dockId);
-    if (specific && specific.restriction_type !== 'mixto') return specific;
+    if (specific) {
+      return specific.restriction_type !== 'mixto' ? specific : null;
+    }
     const general = scheduleRestrictions.find(r => r.schedule_date === dateStr && r.hour === hour && (!r.dock_id || r.dock_id === 'todos'));
-    if (general && general.restriction_type !== 'mixto') return general;
+    if (general) {
+      return general.restriction_type !== 'mixto' ? general : null;
+    }
+
+    // 2. Verificar Hora de Almuerzo configurada
+    if (
+      lunchBreakConfig.enabled &&
+      lunchBreakConfig.hour === hour &&
+      lunchBreakConfig.days.includes(dayOfWeek) &&
+      (lunchBreakConfig.docks === 'todos' || lunchBreakConfig.docks === dockId)
+    ) {
+      return {
+        schedule_date: dateStr,
+        hour: hour,
+        dock_id: dockId,
+        restriction_type: 'bloqueado',
+        note: '🍱 Hora de Almuerzo Operativo'
+      };
+    }
+
+    // 3. Verificar Reglas Semanales Recurrentes Predeterminadas
+    const recurringMatch = recurringRules.find(r => 
+      r.day_of_week === dayOfWeek && 
+      r.hour === hour && 
+      (!r.dock_id || r.dock_id === 'todos' || r.dock_id === dockId) &&
+      r.is_active !== false &&
+      r.restriction_type !== 'mixto'
+    );
+
+    if (recurringMatch) {
+      return {
+        schedule_date: dateStr,
+        hour: hour,
+        dock_id: dockId,
+        restriction_type: recurringMatch.restriction_type,
+        note: recurringMatch.note || (recurringMatch.restriction_type === 'congelado' ? 'Solo Congelado (Regla Semanal)' : recurringMatch.restriction_type === 'refrigerado' ? 'Solo Refrigerado (Regla Semanal)' : 'Bloqueado (Regla Semanal)')
+      };
+    }
+
     return null;
+  };
+
+  const handleAddRecurringRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const newRule: ScheduleRecurringRule = {
+      day_of_week: selectedDayTab,
+      hour: newRuleHour,
+      dock_id: newRuleDockId === 'todos' ? null : newRuleDockId,
+      restriction_type: newRuleType,
+      note: newRuleNote.trim() || undefined,
+      is_active: true
+    };
+
+    try {
+      await supabase.from('schedule_recurring_rules').upsert([newRule], { onConflict: 'day_of_week,hour,dock_id' });
+    } catch (err) {
+      console.warn('Fallback local para regla recurrente:', err);
+    }
+
+    setRecurringRules(prev => {
+      const filtered = prev.filter(r => !(r.day_of_week === selectedDayTab && r.hour === newRuleHour && (r.dock_id === (newRuleDockId === 'todos' ? null : newRuleDockId))));
+      const updated = [...filtered, newRule];
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('nexus_schedule_recurring_rules', JSON.stringify(updated));
+      }
+      return updated;
+    });
+
+    setNewRuleNote('');
+  };
+
+  const handleDeleteRecurringRule = async (ruleToDelete: ScheduleRecurringRule) => {
+    try {
+      await supabase
+        .from('schedule_recurring_rules')
+        .delete()
+        .match({ day_of_week: ruleToDelete.day_of_week, hour: ruleToDelete.hour, dock_id: ruleToDelete.dock_id });
+    } catch (err) {
+      console.warn('Fallback local para borrar regla recurrente:', err);
+    }
+
+    setRecurringRules(prev => {
+      const updated = prev.filter(r => !(r.day_of_week === ruleToDelete.day_of_week && r.hour === ruleToDelete.hour && r.dock_id === ruleToDelete.dock_id));
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('nexus_schedule_recurring_rules', JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const handleResetToCialDefaults = async () => {
+    try {
+      await supabase.from('schedule_recurring_rules').delete().neq('day_of_week', 99);
+      await supabase.from('schedule_recurring_rules').insert(INITIAL_RECURRING_RULES);
+    } catch (err) {
+      console.warn('Fallback local reset:', err);
+    }
+
+    setRecurringRules(INITIAL_RECURRING_RULES);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nexus_schedule_recurring_rules', JSON.stringify(INITIAL_RECURRING_RULES));
+    }
+  };
+
+  const handleSaveLunchConfig = (config: typeof lunchBreakConfig) => {
+    setLunchBreakConfig(config);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nexus_lunch_break_config', JSON.stringify(config));
+    }
   };
 
   const handleQuickToggleSlotRestriction = async (dockId: string, hour: number, date: Date, nextType: RestrictionType) => {
@@ -2678,7 +2864,17 @@ export default function App() {
                 </div>
                 
                 <div className="flex flex-wrap items-center gap-2">
-                  {/* Botón Fijar Bloques Horarios */}
+                  {/* Botón Plantilla Semanal y Almuerzo */}
+                  <button
+                    type="button"
+                    onClick={() => setShowRecurringModal(true)}
+                    className="flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-xl text-xs font-extrabold shadow-2xs transition-all active:scale-95 cursor-pointer"
+                  >
+                    <UtensilsCrossed className="w-3.5 h-3.5 text-[#0a5c36]" />
+                    <span>Plantilla Semanal & Almuerzo</span>
+                  </button>
+
+                  {/* Botón Fijar Bloques Horarios por Fecha */}
                   <button
                     type="button"
                     onClick={() => {
@@ -2688,7 +2884,7 @@ export default function App() {
                     className="flex items-center gap-1.5 bg-gradient-to-r from-sky-600 to-emerald-600 hover:from-sky-700 hover:to-emerald-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-sm transition-all active:scale-95 cursor-pointer"
                   >
                     <SlidersHorizontal className="w-3.5 h-3.5" />
-                    <span>Fijar Bloques (Frío / Congelado)</span>
+                    <span>Fijar Bloque Fecha</span>
                   </button>
 
                   {/* Control de Navegación de Fecha */}
@@ -4558,6 +4754,370 @@ export default function App() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Modal Plantilla Semanal y Hora de Almuerzo */}
+      {showRecurringModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowRecurringModal(false)}></div>
+          
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-7 w-full max-w-2xl relative z-10 space-y-5 shadow-2xl text-slate-800 animate-fadeIn max-h-[90vh] overflow-y-auto">
+            
+            {/* Cabecera */}
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 rounded-xl bg-[#0a5c36] text-white shadow-xs">
+                    <UtensilsCrossed className="w-4 h-4" />
+                  </span>
+                  <h3 className="font-extrabold text-lg text-slate-900">Plantilla Semanal & Configuración</h3>
+                </div>
+                <p className="text-xs text-slate-500 font-semibold mt-0.5">
+                  Reglas predeterminadas automáticas por día de la semana y horario de colación
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRecurringModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors font-bold text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Pestañas del Modal */}
+            <div className="flex border-b border-slate-200 gap-2">
+              <button
+                type="button"
+                onClick={() => setRecurringModalTab('semanal')}
+                className={`pb-2.5 px-3 text-xs font-extrabold border-b-2 transition-all cursor-pointer ${
+                  recurringModalTab === 'semanal'
+                    ? 'border-[#0a5c36] text-[#0a5c36]'
+                    : 'border-transparent text-slate-400 hover:text-slate-700'
+                }`}
+              >
+                📅 Reglas por Día (Lunes a Viernes)
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecurringModalTab('almuerzo')}
+                className={`pb-2.5 px-3 text-xs font-extrabold border-b-2 transition-all cursor-pointer ${
+                  recurringModalTab === 'almuerzo'
+                    ? 'border-[#0a5c36] text-[#0a5c36]'
+                    : 'border-transparent text-slate-400 hover:text-slate-700'
+                }`}
+              >
+                🍱 Hora de Almuerzo Operativo
+              </button>
+            </div>
+
+            {recurringModalTab === 'semanal' ? (
+              <div className="space-y-5">
+                {/* Selector de Día de la Semana */}
+                <div className="flex flex-wrap gap-1.5 p-1.5 bg-slate-100 rounded-2xl">
+                  {[
+                    { day: 1, label: 'Lunes' },
+                    { day: 2, label: 'Martes' },
+                    { day: 3, label: 'Miércoles' },
+                    { day: 4, label: 'Jueves' },
+                    { day: 5, label: 'Viernes' },
+                    { day: 6, label: 'Sábado' },
+                    { day: 0, label: 'Domingo' }
+                  ].map(d => (
+                    <button
+                      key={d.day}
+                      type="button"
+                      onClick={() => setSelectedDayTab(d.day)}
+                      className={`flex-1 min-w-[70px] py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer text-center ${
+                        selectedDayTab === d.day
+                          ? 'bg-[#0a5c36] text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-white/60'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Lista de reglas activas para el día seleccionado */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
+                      Reglas activas para los {[
+                        'Domingos', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábados'
+                      ][selectedDayTab]}:
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-bold">
+                      {recurringRules.filter(r => r.day_of_week === selectedDayTab).length} regla(s)
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {recurringRules
+                      .filter(r => r.day_of_week === selectedDayTab)
+                      .sort((a, b) => a.hour - b.hour)
+                      .map((rule, idx) => {
+                        const dockName = rule.dock_id ? (docks.find(d => d.id === rule.dock_id)?.name || 'Andén') : 'Todos los Andenes';
+                        let tagBg = 'bg-slate-100 text-slate-800 border-slate-200';
+                        let tagLabel = 'Mixto';
+                        if (rule.restriction_type === 'congelado') {
+                          tagBg = 'bg-sky-50 text-sky-900 border-sky-200';
+                          tagLabel = '❄️ Solo Congelado';
+                        } else if (rule.restriction_type === 'refrigerado') {
+                          tagBg = 'bg-emerald-50 text-emerald-900 border-emerald-200';
+                          tagLabel = '🥬 Solo Refrigerado';
+                        } else if (rule.restriction_type === 'bloqueado') {
+                          tagBg = 'bg-red-50 text-red-900 border-red-200';
+                          tagLabel = '🚫 Bloqueado';
+                        }
+
+                        return (
+                          <div 
+                            key={rule.id || `${rule.day_of_week}-${rule.hour}-${idx}`}
+                            className="bg-slate-50 border border-slate-200 p-3 rounded-2xl flex items-center justify-between gap-3 shadow-2xs hover:border-slate-300 transition-all"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="font-mono text-xs font-black bg-white px-2 py-1 rounded-lg border border-slate-200 text-slate-800 shadow-2xs">
+                                {rule.hour.toString().padStart(2, '0')}:00 hrs
+                              </span>
+                              <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border ${tagBg}`}>
+                                {tagLabel}
+                              </span>
+                              <div className="min-w-0">
+                                <span className="text-[11px] font-bold text-slate-700 block truncate">
+                                  {dockName}
+                                </span>
+                                {rule.note && (
+                                  <span className="text-[10px] text-slate-400 font-medium truncate block">
+                                    {rule.note}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteRecurringRule(rule)}
+                              title="Eliminar regla predeterminada"
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
+
+                    {recurringRules.filter(r => r.day_of_week === selectedDayTab).length === 0 && (
+                      <div className="text-center py-6 bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-xs text-slate-400 font-semibold">
+                        Sin restricciones fijadas para este día (Recepción libre/mixta)
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Formulario para agregar nueva regla recurrente */}
+                <form onSubmit={handleAddRecurringRule} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                  <span className="text-[10px] font-extrabold text-[#0a5c36] uppercase tracking-wider block">
+                    + Agregar Regla a los {['Domingos', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábados'][selectedDayTab]}
+                  </span>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Hora</label>
+                      <select
+                        value={newRuleHour}
+                        onChange={(e) => setNewRuleHour(Number(e.target.value))}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
+                      >
+                        {[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(h => (
+                          <option key={h} value={h}>{h.toString().padStart(2, '0')}:00 hrs</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Tipo Restricción</label>
+                      <select
+                        value={newRuleType}
+                        onChange={(e) => setNewRuleType(e.target.value as RestrictionType)}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
+                      >
+                        <option value="congelado">❄️ Solo Congelado</option>
+                        <option value="refrigerado">🥬 Solo Refrigerado</option>
+                        <option value="bloqueado">🚫 Bloqueado</option>
+                        <option value="mixto">🔄 Mixto / Libre</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Andén</label>
+                      <select
+                        value={newRuleDockId}
+                        onChange={(e) => setNewRuleDockId(e.target.value)}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
+                      >
+                        <option value="todos">Todos los Andenes</option>
+                        {docks.map(d => (
+                          <option key={d.id} value={d.id}>{d.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <input 
+                      type="text" 
+                      placeholder="Motivo / Nota de la regla (Opcional)..."
+                      value={newRuleNote}
+                      onChange={(e) => setNewRuleNote(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#0a5c36]"
+                    />
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      className="bg-[#0a5c36] hover:bg-[#08482a] text-white px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-xs"
+                    >
+                      Guardar Regla
+                    </button>
+                  </div>
+                </form>
+
+                {/* Botón Restablecer */}
+                <div className="pt-2 flex items-center justify-between border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleResetToCialDefaults}
+                    className="text-xs font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Restablecer reglas predeterminadas CiAL (Lun-Vie)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowRecurringModal(false)}
+                    className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-sm"
+                  >
+                    Listo
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Pestaña: Configuración de Hora de Almuerzo */
+              <div className="space-y-5">
+                <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">🍱</span>
+                      <div>
+                        <h4 className="text-xs font-black text-amber-900 uppercase tracking-wider">Bloqueo de Hora de Almuerzo</h4>
+                        <p className="text-[11px] text-amber-700 font-medium">
+                          Bloquea automáticamente la recepción durante el horario de colación en los andenes seleccionados.
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Toggle Switch */}
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={lunchBreakConfig.enabled}
+                        onChange={(e) => handleSaveLunchConfig({ ...lunchBreakConfig, enabled: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#0a5c36]"></div>
+                    </label>
+                  </div>
+                </div>
+
+                {lunchBreakConfig.enabled && (
+                  <div className="space-y-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Hora de Almuerzo</label>
+                      <div className="grid grid-cols-3 gap-2.5">
+                        {[12, 13, 14].map(h => (
+                          <button
+                            key={h}
+                            type="button"
+                            onClick={() => handleSaveLunchConfig({ ...lunchBreakConfig, hour: h })}
+                            className={`py-2.5 rounded-xl text-xs font-extrabold border transition-all cursor-pointer ${
+                              lunchBreakConfig.hour === h
+                                ? 'bg-[#0a5c36] text-white border-[#0a5c36] shadow-sm'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {h.toString().padStart(2, '0')}:00 hrs
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Días que aplica</label>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { day: 1, label: 'Lunes' },
+                          { day: 2, label: 'Martes' },
+                          { day: 3, label: 'Miércoles' },
+                          { day: 4, label: 'Jueves' },
+                          { day: 5, label: 'Viernes' },
+                          { day: 6, label: 'Sábado' },
+                          { day: 0, label: 'Domingo' }
+                        ].map(d => {
+                          const isSelected = lunchBreakConfig.days.includes(d.day);
+                          return (
+                            <button
+                              key={d.day}
+                              type="button"
+                              onClick={() => {
+                                const newDays = isSelected 
+                                  ? lunchBreakConfig.days.filter(x => x !== d.day) 
+                                  : [...lunchBreakConfig.days, d.day];
+                                handleSaveLunchConfig({ ...lunchBreakConfig, days: newDays });
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-black shadow-2xs'
+                                  : 'bg-white text-slate-400 border-slate-200'
+                              }`}
+                            >
+                              {isSelected ? '✓ ' : ''}{d.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Andenes afectados</label>
+                      <select
+                        value={lunchBreakConfig.docks}
+                        onChange={(e) => handleSaveLunchConfig({ ...lunchBreakConfig, docks: e.target.value })}
+                        className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs w-full font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
+                      >
+                        <option value="todos">🌟 Todos los Andenes (1 al {docks.length || 5})</option>
+                        {docks.map(d => (
+                          <option key={d.id} value={d.id}>{d.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowRecurringModal(false)}
+                    className="bg-[#0a5c36] hover:bg-[#08482a] text-white px-6 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-md"
+                  >
+                    Guardar y Aplicar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
