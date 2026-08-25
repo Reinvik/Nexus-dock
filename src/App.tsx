@@ -24,7 +24,9 @@ import {
   Activity,
   Building2,
   MessageSquare,
-  Key
+  Key,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -122,6 +124,19 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'yard' | 'planta2' | 'scheduler' | 'history' | 'reports'>('yard');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showPlanta2AddModal, setShowPlanta2AddModal] = useState(false);
+  const [isPlanta2HeaderCollapsed, setIsPlanta2HeaderCollapsed] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('planta2_header_collapsed') === 'true';
+    }
+    return false;
+  });
+
+  const togglePlanta2Header = (collapsed: boolean) => {
+    setIsPlanta2HeaderCollapsed(collapsed);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('planta2_header_collapsed', String(collapsed));
+    }
+  };
   const [selectedTruckForTimeline, setSelectedTruckForTimeline] = useState<YardOperation | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1994,80 +2009,147 @@ export default function App() {
                ==================================================== */
             <section className="space-y-6">
               
-              {/* Header Banner & KPIs Planta 2 */}
-              <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-[#08482a] text-white border border-slate-700/60 rounded-3xl p-6 shadow-xl relative overflow-hidden">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className="bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full flex items-center gap-1.5 shadow-inner">
-                        <Factory className="w-3.5 h-3.5" />
-                        Planta 2 — CiAL Alimentos
+              {/* Header Banner & KPIs Planta 2 (Expandible / Compactable) */}
+              {!isPlanta2HeaderCollapsed ? (
+                /* Modo Expandido Completo */
+                <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-[#08482a] text-white border border-slate-700/60 rounded-3xl p-6 shadow-xl relative overflow-hidden transition-all animate-fadeIn">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full flex items-center gap-1.5 shadow-inner">
+                          <Factory className="w-3.5 h-3.5" />
+                          Planta 2 — CiAL Alimentos
+                        </span>
+                      </div>
+                      <h2 className="text-2xl font-black tracking-tight text-white">
+                        Despacho y Control de Ruta Planta 2
+                      </h2>
+                      <p className="text-xs text-slate-300 font-medium max-w-2xl leading-relaxed">
+                        Gestión operativa de camiones en Planta 2. Registre despachos directo a ruta sin cita previa y realice el seguimiento continuo de tiempos hasta su arribo y descarga en el Centro de Distribución (Patio).
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <button
+                        onClick={() => {
+                          const now = new Date();
+                          setScheduledEntryTime(formatLocalDatetime(now));
+                          setShowPlanta2AddModal(true);
+                        }}
+                        className="flex items-center gap-2 bg-gradient-to-r from-cyan-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 text-slate-950 font-black text-xs px-5 py-3 rounded-2xl shadow-lg hover:shadow-cyan-400/25 transition-all active:scale-95 cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4 stroke-[3]" />
+                        Ingresar Despacho Planta 2
+                      </button>
+
+                      <button
+                        onClick={() => togglePlanta2Header(true)}
+                        title="Ocultar o compactar este panel"
+                        className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white px-3 py-3 rounded-2xl text-xs font-bold transition-all cursor-pointer border border-white/10"
+                      >
+                        <ChevronUp className="w-4 h-4" />
+                        <span className="hidden sm:inline">Compactar</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* KPI Counters */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-6 border-t border-white/10">
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                      <div className="text-[10px] text-cyan-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                        <Factory className="w-3.5 h-3.5 text-cyan-400" />
+                        En Carga P2
+                      </div>
+                      <div className="text-2xl font-black text-white mt-1">
+                        {trucks.filter(t => t.origin === 'planta_2' && t.status === 'planta_carga').length}
+                      </div>
+                    </div>
+
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                      <div className="text-[10px] text-blue-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                        <Truck className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
+                        En Ruta a Patio
+                      </div>
+                      <div className="text-2xl font-black text-cyan-300 mt-1">
+                        {trucks.filter(t => t.origin === 'planta_2' && t.status === 'en_ruta').length}
+                      </div>
+                    </div>
+
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                      <div className="text-[10px] text-emerald-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                        En Patio CD
+                      </div>
+                      <div className="text-2xl font-black text-emerald-300 mt-1">
+                        {trucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden')).length}
+                      </div>
+                    </div>
+
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
+                      <div className="text-[10px] text-purple-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-purple-400" />
+                        Despachados Hoy
+                      </div>
+                      <div className="text-2xl font-black text-white mt-1">
+                        {trucks.filter(t => t.origin === 'planta_2' && t.status === 'completado').length}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Modo Compacto / Oculto */
+                <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-[#08482a] text-white border border-slate-700/60 rounded-2xl p-3.5 shadow-md flex flex-wrap items-center justify-between gap-3 transition-all animate-fadeIn">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <span className="bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg flex items-center gap-1">
+                      <Factory className="w-3 h-3 text-cyan-400" />
+                      Planta 2
+                    </span>
+
+                    {/* Mini KPI Pills */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="bg-white/5 border border-white/10 px-2 py-1 rounded-lg text-[11px] font-bold text-cyan-200 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                        <strong className="text-white font-black">{trucks.filter(t => t.origin === 'planta_2' && t.status === 'planta_carga').length}</strong> Carga
+                      </span>
+                      <span className="bg-white/5 border border-white/10 px-2 py-1 rounded-lg text-[11px] font-bold text-blue-200 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
+                        <strong className="text-white font-black">{trucks.filter(t => t.origin === 'planta_2' && t.status === 'en_ruta').length}</strong> Ruta
+                      </span>
+                      <span className="bg-white/5 border border-white/10 px-2 py-1 rounded-lg text-[11px] font-bold text-emerald-200 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                        <strong className="text-white font-black">{trucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden')).length}</strong> Patio
+                      </span>
+                      <span className="bg-white/5 border border-white/10 px-2 py-1 rounded-lg text-[11px] font-bold text-purple-200 hidden md:flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
+                        <strong className="text-white font-black">{trucks.filter(t => t.origin === 'planta_2' && t.status === 'completado').length}</strong> Entregados
                       </span>
                     </div>
-                    <h2 className="text-2xl font-black tracking-tight text-white">
-                      Despacho y Control de Ruta Planta 2
-                    </h2>
-                    <p className="text-xs text-slate-300 font-medium max-w-2xl leading-relaxed">
-                      Gestión operativa de camiones en Planta 2. Registre despachos directo a ruta sin cita previa y realice el seguimiento continuo de tiempos hasta su arribo y descarga en el Centro de Distribución (Patio).
-                    </p>
                   </div>
 
-                  <button
-                    onClick={() => {
-                      const now = new Date();
-                      setScheduledEntryTime(formatLocalDatetime(now));
-                      setShowPlanta2AddModal(true);
-                    }}
-                    className="flex items-center gap-2 bg-gradient-to-r from-cyan-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 text-slate-950 font-black text-xs px-5 py-3 rounded-2xl shadow-lg hover:shadow-cyan-400/25 transition-all active:scale-95 cursor-pointer shrink-0"
-                  >
-                    <Plus className="w-4 h-4 stroke-[3]" />
-                    Ingresar Despacho Planta 2
-                  </button>
-                </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        const now = new Date();
+                        setScheduledEntryTime(formatLocalDatetime(now));
+                        setShowPlanta2AddModal(true);
+                      }}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-cyan-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 text-slate-950 font-black text-xs px-4 py-2 rounded-xl shadow-md hover:shadow-cyan-400/25 transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                      Ingresar Despacho Planta 2
+                    </button>
 
-                {/* KPI Counters */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-6 border-t border-white/10">
-                  <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
-                    <div className="text-[10px] text-cyan-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-                      <Factory className="w-3.5 h-3.5 text-cyan-400" />
-                      En Carga P2
-                    </div>
-                    <div className="text-2xl font-black text-white mt-1">
-                      {trucks.filter(t => t.origin === 'planta_2' && t.status === 'planta_carga').length}
-                    </div>
-                  </div>
-
-                  <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
-                    <div className="text-[10px] text-blue-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-                      <Truck className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
-                      En Ruta a Patio
-                    </div>
-                    <div className="text-2xl font-black text-cyan-300 mt-1">
-                      {trucks.filter(t => t.origin === 'planta_2' && t.status === 'en_ruta').length}
-                    </div>
-                  </div>
-
-                  <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
-                    <div className="text-[10px] text-emerald-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                      En Patio CD
-                    </div>
-                    <div className="text-2xl font-black text-emerald-300 mt-1">
-                      {trucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden')).length}
-                    </div>
-                  </div>
-
-                  <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-sm">
-                    <div className="text-[10px] text-purple-300 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-purple-400" />
-                      Despachados Hoy
-                    </div>
-                    <div className="text-2xl font-black text-white mt-1">
-                      {trucks.filter(t => t.origin === 'planta_2' && t.status === 'completado').length}
-                    </div>
+                    <button
+                      onClick={() => togglePlanta2Header(false)}
+                      title="Expandir panel de información y métricas"
+                      className="flex items-center gap-1 bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white px-2.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border border-white/10"
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                      <span className="hidden sm:inline">Expandir</span>
+                    </button>
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* Kanban Board Planta 2 (4 Columnas) */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
