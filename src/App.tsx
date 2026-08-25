@@ -1926,8 +1926,8 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* Listado de tarjetas de este día */}
-                        <div className="space-y-3">
+                        {/* Listado de tarjetas ultra-compactas de este día */}
+                        <div className="space-y-2">
                           {grouped[dateStr].map(truck => {
                             const compliance = checkExitCompliance(truck);
                             return (
@@ -1935,61 +1935,61 @@ export default function App() {
                                 key={truck.id} 
                                 draggable={true}
                                 onDragStart={(e) => handleDragStart(e, truck.id, truck.status)}
-                                className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-slate-300 transition-all cursor-grab active:cursor-grabbing hover:shadow-md opacity-80 hover:opacity-100"
+                                onClick={() => setSelectedTruckForTimeline(truck)}
+                                className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-emerald-400 p-3 rounded-2xl shadow-2xs hover:shadow-sm transition-all cursor-pointer flex items-center justify-between gap-3 group select-none opacity-95 hover:opacity-100 relative overflow-hidden"
+                                title="Haz clic para ver trazabilidad de tiempos y detalles"
                               >
-                                <div className="flex justify-between items-start gap-2">
-                                  <div className="flex flex-wrap gap-1.5">
-                                    <span className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-500 font-bold tracking-wider">
-                                      TR: {truck.tractor_plate || 'S/T'}
-                                    </span>
-                                    <span className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-400 font-bold tracking-wider">
-                                      R: {truck.trailer_plate || 'S/R'}
-                                    </span>
-                                  </div>
-                                  
-                                  <div className="flex items-center gap-1.5">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleRevertStatus(truck);
-                                      }}
-                                      title="Regresar a Andén"
-                                      className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-                                    >
-                                      <RotateCcw className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleDeleteTruck(truck.id);
-                                      }}
-                                      title="Eliminar registro"
-                                      className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                    <span className={`text-[9px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 ${compliance === 'A Tiempo' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
-                                      <CheckCircle2 className="w-3.5 h-3.5" />
-                                      {compliance}
-                                    </span>
+                                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                  <span className={`w-2 h-2 rounded-full shrink-0 ${compliance === 'A Tiempo' ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="font-extrabold text-xs text-slate-800 truncate group-hover:text-[#0a5c36]">
+                                        {truck.driver}
+                                      </span>
+                                      <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">
+                                        {truck.end_time ? new Date(truck.end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                      <span className="font-mono text-[10px] font-extrabold bg-slate-100 px-1.5 py-0.2 rounded text-slate-700 border border-slate-200">
+                                        TR: {truck.tractor_plate || 'S/T'}
+                                      </span>
+                                      {truck.dock?.name && (
+                                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200/60">
+                                          {truck.dock.name}
+                                        </span>
+                                      )}
+                                      <span className="text-[10px] text-slate-400 font-semibold truncate">
+                                        • {truck.carrier}
+                                      </span>
+                                    </div>
                                   </div>
                                 </div>
-                                
-                                <div className="text-xs text-slate-500 font-semibold space-y-1 pt-1 border-t border-slate-50">
-                                  <p className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-slate-400" /> Andén: {truck.dock?.name || 'S/A'}</p>
-                                  <p className="flex items-center gap-1.5"><User className="w-3.5 h-3.5 text-slate-400" /> Chofer: {truck.driver}</p>
-                                  <p className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-slate-400" /> Duración: {
-                                    truck.start_time && truck.end_time 
-                                      ? `${Math.round((new Date(truck.end_time).getTime() - new Date(truck.start_time).getTime()) / (1000 * 60))} min`
-                                      : 'N/A'
-                                  }</p>
-                                  {truck.scheduled_entry_time && truck.scheduled_end_time && (
-                                    <p className="text-[10px] text-[#0a5c36] font-bold pl-5">
-                                      Citación: {new Date(truck.scheduled_entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} - {new Date(truck.scheduled_end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
-                                    </p>
-                                  )}
+
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRevertStatus(truck);
+                                    }}
+                                    title="Regresar a Andén"
+                                    className="p-1 text-slate-300 hover:text-emerald-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteTruck(truck.id);
+                                    }}
+                                    title="Eliminar registro"
+                                    className="p-1 text-slate-300 hover:text-red-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <Activity className="w-4 h-4 text-slate-400 group-hover:text-[#0a5c36] transition-colors" />
                                 </div>
                               </div>
                             );
@@ -2379,35 +2379,57 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="space-y-4 flex-1 overflow-y-auto">
+                  <div className="space-y-2 flex-1 overflow-y-auto pr-1">
                     {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'completado')
                       .sort((a, b) => new Date(b.end_time || b.entry_time).getTime() - new Date(a.end_time || a.entry_time).getTime())
                       .map(truck => (
                       <div 
                         key={truck.id} 
-                        className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-slate-300 transition-all opacity-90"
+                        onClick={() => setSelectedTruckForTimeline(truck)}
+                        className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-cyan-400 p-3 rounded-2xl shadow-2xs hover:shadow-sm transition-all cursor-pointer flex items-center justify-between gap-3 group select-none relative overflow-hidden"
+                        title="Haz clic para ver trazabilidad de tiempos y detalles"
                       >
-                        <div className="flex justify-between items-center">
-                          <span className="text-[10px] bg-slate-100 text-slate-700 font-extrabold uppercase px-2.5 py-0.5 rounded-full border border-slate-200">
-                            ✅ Finalizado
-                          </span>
-                          <span className="font-mono text-[10px] text-slate-400 font-bold">
-                            {truck.end_time ? new Date(truck.end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}
-                          </span>
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-extrabold text-xs text-slate-800 truncate group-hover:text-cyan-900">
+                                {truck.driver}
+                              </span>
+                              <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">
+                                {truck.end_time ? new Date(truck.end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className="font-mono text-[10px] font-extrabold bg-slate-100 px-1.5 py-0.2 rounded text-slate-700 border border-slate-200">
+                                TR: {truck.tractor_plate || 'S/T'}
+                              </span>
+                              {truck.trailer_plate && (
+                                <span className="font-mono text-[10px] font-bold bg-slate-50 px-1 py-0.2 rounded text-slate-500 border border-slate-200">
+                                  R: {truck.trailer_plate}
+                                </span>
+                              )}
+                              <span className="text-[10px] text-slate-400 font-semibold truncate">
+                                • {truck.carrier}
+                              </span>
+                            </div>
+                          </div>
                         </div>
 
-                        <div className="text-xs space-y-1 text-slate-600 font-medium">
-                          <p className="font-bold text-slate-800">{truck.driver}</p>
-                          <p className="text-[11px] text-slate-500 font-mono">Tractor: {truck.tractor_plate}</p>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteTruck(truck.id);
+                            }}
+                            title="Eliminar registro"
+                            className="p-1 text-slate-300 hover:text-red-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                          <Activity className="w-4 h-4 text-slate-400 group-hover:text-cyan-600 transition-colors" />
                         </div>
-
-                        <button
-                          onClick={() => setSelectedTruckForTimeline(truck)}
-                          className="flex items-center justify-center gap-1.5 text-[11px] text-slate-600 hover:text-slate-900 font-bold w-full py-1 border-t border-slate-100 pt-2 cursor-pointer"
-                        >
-                          <Activity className="w-3.5 h-3.5 text-cyan-600" />
-                          Ver Trazabilidad de Tiempos
-                        </button>
                       </div>
                     ))}
                     {filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'completado').length === 0 && (
