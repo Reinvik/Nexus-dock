@@ -26,10 +26,24 @@ import {
   MessageSquare,
   Key,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  Thermometer,
+  Snowflake,
+  SlidersHorizontal
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
+
+export type RestrictionType = 'mixto' | 'congelado' | 'refrigerado' | 'bloqueado';
+
+export interface ScheduleRestriction {
+  id?: string;
+  schedule_date: string; // 'YYYY-MM-DD'
+  hour: number;
+  dock_id?: string;
+  restriction_type: RestrictionType;
+  note?: string;
+}
 
 interface Dock {
   id: string;
@@ -185,6 +199,25 @@ export default function App() {
   const [citaDate, setCitaDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [citaTime, setCitaTime] = useState<string>('09:00');
   const [selectedDockIdInModal, setSelectedDockIdInModal] = useState<string>('');
+
+  // States para Fijación de Restricciones por Temperatura (Congelado / Refrigerado / Mixto / Bloqueado)
+  const [scheduleRestrictions, setScheduleRestrictions] = useState<ScheduleRestriction[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('nexus_schedule_restrictions');
+      if (saved) {
+        try { return JSON.parse(saved); } catch {}
+      }
+    }
+    return [];
+  });
+  const [showRestrictionModal, setShowRestrictionModal] = useState(false);
+  const [restrictionDate, setRestrictionDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [restrictionDockId, setRestrictionDockId] = useState<string>('todos');
+  const [restrictionStartHour, setRestrictionStartHour] = useState<number>(8);
+  const [restrictionEndHour, setRestrictionEndHour] = useState<number>(20);
+  const [restrictionTypeSelected, setRestrictionTypeSelected] = useState<RestrictionType>('congelado');
+  const [restrictionNote, setRestrictionNote] = useState<string>('');
+  const [savingRestriction, setSavingRestriction] = useState(false);
   
   // States para Historial de Operaciones
   const [historySearch, setHistorySearch] = useState('');
@@ -288,6 +321,19 @@ export default function App() {
 
       if (vehiclesError) throw vehiclesError;
 
+      // Cargar restricciones de bloques
+      try {
+        const { data: restData } = await supabase.from('schedule_restrictions').select('*');
+        if (restData && restData.length > 0) {
+          setScheduleRestrictions(restData);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('nexus_schedule_restrictions', JSON.stringify(restData));
+          }
+        }
+      } catch (e) {
+        console.warn('Error menor al cargar schedule_restrictions:', e);
+      }
+
       setDocks(docksData || []);
       setTrucks(operationsData || []);
       setDrivers(driversData || []);
@@ -297,6 +343,111 @@ export default function App() {
       setErrorMsg(err.message || 'Error al conectar con la base de datos.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const getRestrictionForSlot = (dockId: string, hour: number, date: Date): ScheduleRestriction | null => {
+    const dateStr = date.toISOString().split('T')[0];
+    const specific = scheduleRestrictions.find(r => r.schedule_date === dateStr && r.hour === hour && r.dock_id === dockId);
+    if (specific && specific.restriction_type !== 'mixto') return specific;
+    const general = scheduleRestrictions.find(r => r.schedule_date === dateStr && r.hour === hour && (!r.dock_id || r.dock_id === 'todos'));
+    if (general && general.restriction_type !== 'mixto') return general;
+    return null;
+  };
+
+  const handleQuickToggleSlotRestriction = async (dockId: string, hour: number, date: Date, nextType: RestrictionType) => {
+    const dateStr = date.toISOString().split('T')[0];
+    const item: ScheduleRestriction = {
+      schedule_date: dateStr,
+      hour: hour,
+      dock_id: dockId,
+      restriction_type: nextType
+    };
+
+    try {
+      if (nextType === 'mixto') {
+        await supabase
+          .from('schedule_restrictions')
+          .delete()
+          .match({ schedule_date: dateStr, hour: hour, dock_id: dockId });
+      } else {
+        await supabase
+          .from('schedule_restrictions')
+          .upsert([item], { onConflict: 'schedule_date,hour,dock_id' });
+      }
+    } catch (err) {
+      console.warn('Upsert fallback local:', err);
+    }
+
+    setScheduleRestrictions(prev => {
+      const filtered = prev.filter(r => !(r.schedule_date === dateStr && r.hour === hour && r.dock_id === dockId));
+      const updated = nextType === 'mixto' ? filtered : [...filtered, item];
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('nexus_schedule_restrictions', JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const handleSaveBulkRestriction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingRestriction(true);
+    try {
+      const targetDocks = restrictionDockId === 'todos' ? docks : docks.filter(d => d.id === restrictionDockId);
+      const newItems: ScheduleRestriction[] = [];
+      const minH = Math.min(restrictionStartHour, restrictionEndHour);
+      const maxH = Math.max(restrictionStartHour, restrictionEndHour);
+
+      for (let h = minH; h <= maxH; h++) {
+        for (const d of targetDocks) {
+          newItems.push({
+            schedule_date: restrictionDate,
+            hour: h,
+            dock_id: d.id,
+            restriction_type: restrictionTypeSelected,
+            note: restrictionNote.trim() || undefined
+          });
+        }
+      }
+
+      // Guardar en Supabase
+      try {
+        if (restrictionTypeSelected === 'mixto') {
+          for (const item of newItems) {
+            await supabase
+              .from('schedule_restrictions')
+              .delete()
+              .match({ schedule_date: item.schedule_date, hour: item.hour, dock_id: item.dock_id });
+          }
+        } else {
+          await supabase
+            .from('schedule_restrictions')
+            .upsert(newItems, { onConflict: 'schedule_date,hour,dock_id' });
+        }
+      } catch (err) {
+        console.warn('Fallback a almacenamiento local:', err);
+      }
+
+      setScheduleRestrictions(prev => {
+        const filtered = prev.filter(r => {
+          const matchesDate = r.schedule_date === restrictionDate;
+          const matchesHour = r.hour >= minH && r.hour <= maxH;
+          const matchesDock = restrictionDockId === 'todos' || r.dock_id === restrictionDockId;
+          return !(matchesDate && matchesHour && matchesDock);
+        });
+        const updated = restrictionTypeSelected === 'mixto' ? filtered : [...filtered, ...newItems];
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('nexus_schedule_restrictions', JSON.stringify(updated));
+        }
+        return updated;
+      });
+
+      setShowRestrictionModal(false);
+      setRestrictionNote('');
+    } catch (err) {
+      console.error('Error guardando restricción:', err);
+    } finally {
+      setSavingRestriction(false);
     }
   };
 
@@ -2515,54 +2666,87 @@ export default function App() {
             <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-6 shadow-sm">
               
               {/* Barra de Controles Superiores */}
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-slate-100">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100">
                 <div className="space-y-1">
-                  <h3 className="font-extrabold text-lg text-slate-900">Planificador Horario de Andenes</h3>
-                  <p className="text-xs text-slate-500 font-semibold">Visualización y reservas diarias de ocupación física</p>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-extrabold text-lg text-slate-900">Planificador Horario de Andenes</h3>
+                    <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                      Control Inbound
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 font-semibold">Visualización, fijación de temperatura (Congelado/Refrigerado) y reservas diarias</p>
                 </div>
                 
-                {/* Control de Navegación de Fecha */}
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-1.5 shadow-sm">
-                  <button 
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Botón Fijar Bloques Horarios */}
+                  <button
                     type="button"
-                    onClick={handlePrevDay}
-                    className="p-2 rounded-lg hover:bg-slate-200 text-slate-600 transition-colors font-bold text-sm cursor-pointer"
-                  >
-                    &larr; Anterior
-                  </button>
-                  <input 
-                    type="date"
-                    value={selectedScheduleDate.toISOString().split('T')[0]}
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        setSelectedScheduleDate(new Date(e.target.value + 'T12:00:00'));
-                      }
+                    onClick={() => {
+                      setRestrictionDate(selectedScheduleDate.toISOString().split('T')[0]);
+                      setShowRestrictionModal(true);
                     }}
-                    className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
-                  />
-                  <button 
-                    type="button"
-                    onClick={handleNextDay}
-                    className="p-2 rounded-lg hover:bg-slate-200 text-slate-600 transition-colors font-bold text-sm cursor-pointer"
+                    className="flex items-center gap-1.5 bg-gradient-to-r from-sky-600 to-emerald-600 hover:from-sky-700 hover:to-emerald-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-sm transition-all active:scale-95 cursor-pointer"
                   >
-                    Siguiente &rarr;
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    <span>Fijar Bloques (Frío / Congelado)</span>
                   </button>
-                  <button 
-                    type="button"
-                    onClick={handleSetToday}
-                    className="px-3 py-1.5 bg-[#0a5c36] text-white hover:bg-[#08482a] rounded-lg text-xs font-bold transition-all active:scale-95 cursor-pointer ml-1"
-                  >
-                    Hoy
-                  </button>
-                </div>
 
-                {/* Leyenda de Estados */}
-                <div className="flex flex-wrap gap-3 text-[10px] font-bold text-slate-500 bg-slate-50/50 p-2 rounded-lg border border-slate-100">
+                  {/* Control de Navegación de Fecha */}
+                  <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-xs">
+                    <button 
+                      type="button"
+                      onClick={handlePrevDay}
+                      className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-600 transition-colors font-bold text-xs cursor-pointer"
+                    >
+                      &larr; Ant
+                    </button>
+                    <input 
+                      type="date"
+                      value={selectedScheduleDate.toISOString().split('T')[0]}
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          setSelectedScheduleDate(new Date(e.target.value + 'T12:00:00'));
+                        }
+                      }}
+                      className="bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
+                    />
+                    <button 
+                      type="button"
+                      onClick={handleNextDay}
+                      className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-600 transition-colors font-bold text-xs cursor-pointer"
+                    >
+                      Sig &rarr;
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={handleSetToday}
+                      className="px-2.5 py-1 bg-[#0a5c36] text-white hover:bg-[#08482a] rounded-lg text-xs font-bold transition-all active:scale-95 cursor-pointer ml-0.5"
+                    >
+                      Hoy
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Leyenda de Estados y Restricciones */}
+              <div className="flex flex-wrap items-center justify-between gap-3 text-[10px] font-bold text-slate-500 bg-slate-50/70 p-2.5 rounded-xl border border-slate-200/80">
+                <div className="flex flex-wrap items-center gap-3">
                   <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-yellow-100 border border-yellow-300"></span> Citas</span>
                   <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-100 border border-emerald-300"></span> En Andén</span>
-                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-slate-100 border border-slate-350 bg-slate-200"></span> Recibidos</span>
-                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-red-50 border border-red-200"></span> Mantenimiento</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-slate-100 border border-slate-300"></span> Recibidos</span>
+                  <span className="flex items-center gap-1.5 bg-sky-50 text-sky-800 border border-sky-200 px-2 py-0.5 rounded-md font-extrabold">
+                    <Snowflake className="w-3 h-3 text-sky-600" />
+                    Solo Congelado
+                  </span>
+                  <span className="flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md font-extrabold">
+                    <Thermometer className="w-3 h-3 text-emerald-600" />
+                    Solo Refrigerado
+                  </span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-red-100 border border-red-300"></span> Bloqueado / Mantenimiento</span>
                 </div>
+                <span className="text-[10px] text-slate-400 font-semibold hidden lg:inline">
+                  💡 Pasa el cursor sobre un bloque libre para fijar tipo o reservar
+                </span>
               </div>
 
               {/* Matriz / Grid de Horas y Andenes */}
@@ -2580,7 +2764,7 @@ export default function App() {
                               onChange={(e) => handleUpdateDockStatus(dock.id, e.target.value as any)}
                               className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border shadow-xs cursor-pointer focus:outline-none focus:ring-1 focus:ring-[#0a5c36]/20 transition-all ${
                                 dock.status === 'Disponible' 
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' 
+                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' 
                                   : dock.status === 'Ocupado' 
                                   ? 'bg-teal-50 text-teal-700 border-teal-200 animate-pulse hover:bg-teal-100' 
                                   : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
@@ -2610,7 +2794,11 @@ export default function App() {
                           {docks.map(dock => {
                             const isMaintenance = dock.status === 'Mantenimiento';
                             const ops = getOperationsForSlot(dock.id, hour, selectedScheduleDate);
-                            
+                            const restriction = getRestrictionForSlot(dock.id, hour, selectedScheduleDate);
+                            const isCongeladoOnly = restriction?.restriction_type === 'congelado';
+                            const isRefrigeradoOnly = restriction?.restriction_type === 'refrigerado';
+                            const isBlocked = restriction?.restriction_type === 'bloqueado';
+
                             if (isMaintenance) {
                               return (
                                 <td 
@@ -2622,12 +2810,66 @@ export default function App() {
                                 </td>
                               );
                             }
-                            
+
+                            if (isBlocked && ops.length === 0) {
+                              return (
+                                <td 
+                                  key={dock.id} 
+                                  className="p-2 border-r border-slate-200 last:border-r-0 bg-slate-100/70 text-center relative group min-h-[60px]"
+                                  style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(148, 163, 184, 0.08) 10px, rgba(148, 163, 184, 0.08) 20px)' }}
+                                >
+                                  <div className="flex flex-col items-center justify-center gap-1">
+                                    <span className="text-[9px] font-black text-slate-500 bg-slate-200/80 px-2 py-0.5 rounded-full border border-slate-300">
+                                      🚫 Bloqueado
+                                    </span>
+                                    {restriction?.note && (
+                                      <span className="text-[8px] text-slate-400 font-medium truncate max-w-[110px]">{restriction.note}</span>
+                                    )}
+                                  </div>
+                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/60 rounded-lg">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'mixto')}
+                                      className="bg-white hover:bg-slate-100 text-slate-800 px-2 py-1 rounded text-[9px] font-bold shadow-xs cursor-pointer"
+                                    >
+                                      Desbloquear
+                                    </button>
+                                  </div>
+                                </td>
+                              );
+                            }
+
+                            let slotBgClass = '';
+                            if (isCongeladoOnly) slotBgClass = 'bg-sky-50/30';
+                            if (isRefrigeradoOnly) slotBgClass = 'bg-emerald-50/30';
+
                             return (
                               <td 
                                 key={dock.id} 
-                                className="p-2 border-r border-slate-200 last:border-r-0 align-middle relative group min-h-[60px]"
+                                className={`p-2 border-r border-slate-200 last:border-r-0 align-top relative group min-h-[60px] ${slotBgClass}`}
                               >
+                                {/* Badge de fijación de temperatura si está configurada */}
+                                {(isCongeladoOnly || isRefrigeradoOnly) && (
+                                  <div className="mb-1 flex items-center justify-between">
+                                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded flex items-center gap-1 border shadow-2xs ${
+                                      isCongeladoOnly 
+                                        ? 'bg-sky-100 text-sky-900 border-sky-200' 
+                                        : 'bg-emerald-100 text-emerald-900 border-emerald-200'
+                                    }`}>
+                                      {isCongeladoOnly ? <Snowflake className="w-2.5 h-2.5 text-sky-600" /> : <Thermometer className="w-2.5 h-2.5 text-emerald-600" />}
+                                      <span>{isCongeladoOnly ? 'Solo Congelado' : 'Solo Refrigerado'}</span>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'mixto')}
+                                      title="Quitar restricción y volver a Mixto"
+                                      className="text-slate-300 hover:text-red-500 text-[10px] font-bold px-1 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                )}
+
                                 {ops.length > 0 ? (
                                   <div className="space-y-1">
                                     {ops.map(op => {
@@ -2658,7 +2900,7 @@ export default function App() {
                                                     handleRevertStatus(op);
                                                   }}
                                                   title="Revertir estado"
-                                                  className="p-0.5 text-slate-400 hover:text-emerald-600 rounded"
+                                                  className="p-0.5 text-slate-400 hover:text-emerald-600 rounded cursor-pointer"
                                                 >
                                                   <RotateCcw className="w-2.5 h-2.5" />
                                                 </button>
@@ -2670,7 +2912,7 @@ export default function App() {
                                                   handleDeleteTruck(op.id);
                                                 }}
                                                 title="Eliminar ticket"
-                                                className="p-0.5 text-slate-400 hover:text-red-600 rounded"
+                                                className="p-0.5 text-slate-400 hover:text-red-600 rounded cursor-pointer"
                                               >
                                                 <Trash2 className="w-2.5 h-2.5" />
                                               </button>
@@ -2678,14 +2920,16 @@ export default function App() {
                                           </div>
                                           
                                           <p className="font-bold truncate text-slate-800">{op.driver}</p>
-                                          <p className="text-[9px] text-slate-400 truncate">Carga: {op.carrier} • {op.type}</p>
+                                          <p className="text-[9px] text-slate-500 truncate font-semibold">
+                                            {op.carrier === 'Congelado' ? '❄️ Congelado' : op.carrier === 'Refrigerado' ? '🥬 Refrigerado' : `📦 ${op.carrier}`} • {op.type}
+                                          </p>
                                         </div>
                                       );
                                     })}
                                   </div>
                                 ) : (
-                                  /* Celda Vacía - Hover Agendar Cita */
-                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-slate-50/50">
+                                  /* Celda Vacía - Hover Agendar Cita & Fijar Restricción Rápida */
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-50/95 backdrop-blur-2xs p-1.5 z-10">
                                     <button
                                       type="button"
                                       onClick={() => {
@@ -2701,13 +2945,55 @@ export default function App() {
                                         setScheduledEndTime(formatLocalDatetime(new Date(entryDt.getTime() + 15 * 60 * 1000)));
                                         setDurationMinutes(15);
                                         
+                                        // Si el slot tiene fijación de temperatura, setearla por defecto
+                                        if (isCongeladoOnly) setCargoType('Congelado');
+                                        if (isRefrigeradoOnly) setCargoType('Refrigerado');
+
                                         setShowAddModal(true);
                                       }}
-                                      className="flex items-center gap-1 bg-[#0a5c36] hover:bg-[#08482a] text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold shadow-sm transition-all active:scale-95 cursor-pointer"
+                                      className="flex items-center gap-1 bg-[#0a5c36] hover:bg-[#08482a] text-white px-2 py-1 rounded-lg text-[9px] font-bold shadow-xs transition-all active:scale-95 cursor-pointer w-full justify-center"
                                     >
-                                      <Plus className="w-3 h-3" />
+                                      <Plus className="w-2.5 h-2.5" />
                                       Reservar
                                     </button>
+
+                                    {/* Selector rápido de fijación de temperatura para este slot */}
+                                    <div className="flex items-center justify-center gap-1 w-full pt-0.5 border-t border-slate-200/80">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'congelado')}
+                                        title="Fijar este bloque como Solo Congelado"
+                                        className={`px-1.5 py-0.5 rounded text-[9px] transition-colors cursor-pointer ${isCongeladoOnly ? 'bg-sky-200 text-sky-900 font-extrabold' : 'hover:bg-sky-100 text-sky-700 bg-sky-50'}`}
+                                      >
+                                        ❄️
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'refrigerado')}
+                                        title="Fijar este bloque como Solo Refrigerado"
+                                        className={`px-1.5 py-0.5 rounded text-[9px] transition-colors cursor-pointer ${isRefrigeradoOnly ? 'bg-emerald-200 text-emerald-900 font-extrabold' : 'hover:bg-emerald-100 text-emerald-700 bg-emerald-50'}`}
+                                      >
+                                        🥬
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'bloqueado')}
+                                        title="Bloquear este bloque para recepción"
+                                        className={`px-1.5 py-0.5 rounded text-[9px] transition-colors cursor-pointer ${isBlocked ? 'bg-red-200 text-red-900 font-extrabold' : 'hover:bg-red-100 text-red-700 bg-red-50'}`}
+                                      >
+                                        🚫
+                                      </button>
+                                      {(isCongeladoOnly || isRefrigeradoOnly || isBlocked) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'mixto')}
+                                          title="Restablecer a Mixto / Libre"
+                                          className="px-1 py-0.5 rounded text-[9px] hover:bg-slate-200 text-slate-600 cursor-pointer"
+                                        >
+                                          🔄
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                 )}
                               </td>
@@ -3410,6 +3696,64 @@ export default function App() {
                   </button>
                 </div>
               </div>
+
+              {/* Validación Inteligente de Restricción de Bloque Horario */}
+              {(() => {
+                const selectedDateStr = scheduledEntryTime ? scheduledEntryTime.split('T')[0] : citaDate;
+                const selectedHour = scheduledEntryTime ? new Date(scheduledEntryTime).getHours() : (citaTime ? parseInt(citaTime.split(':')[0]) : null);
+                const targetDockId = selectedDockIdInModal;
+                
+                if (selectedHour !== null && targetDockId) {
+                  const targetDockName = docks.find(d => d.id === targetDockId)?.name || 'Andén';
+                  const restriction = getRestrictionForSlot(targetDockId, selectedHour, new Date(selectedDateStr + 'T12:00:00'));
+                  
+                  if (restriction && restriction.restriction_type !== 'mixto') {
+                    const isCongeladoBlocked = restriction.restriction_type === 'refrigerado' && cargoType === 'Congelado';
+                    const isRefrigeradoBlocked = restriction.restriction_type === 'congelado' && cargoType === 'Refrigerado';
+                    const isEntirelyBlocked = restriction.restriction_type === 'bloqueado';
+
+                    if (isEntirelyBlocked) {
+                      return (
+                        <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex items-start gap-2.5 text-red-900 text-xs animate-fadeIn">
+                          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-extrabold">⛔ Bloque Horario Bloqueado</p>
+                            <p className="text-[11px] text-red-700 mt-0.5">
+                              El <strong>{targetDockName}</strong> a las <strong>{selectedHour}:00 hrs</strong> está configurado como Bloqueado para recepción {restriction.note ? `("${restriction.note}")` : ''}.
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (isCongeladoBlocked || isRefrigeradoBlocked) {
+                      return (
+                        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 flex items-start gap-2.5 text-amber-900 text-xs animate-fadeIn">
+                          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-extrabold">
+                              ⚠️ Restricción de Bloque: {restriction.restriction_type === 'congelado' ? '❄️ Solo Congelado' : '🥬 Solo Refrigerado'}
+                            </p>
+                            <p className="text-[11px] text-amber-800 mt-0.5">
+                              El <strong>{targetDockName}</strong> a las <strong>{selectedHour}:00 hrs</strong> está fijado para <strong>{restriction.restriction_type === 'congelado' ? 'Solo Congelado' : 'Solo Refrigerado'}</strong>, pero la carga seleccionada es <strong>"{cargoType}"</strong>.
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="bg-sky-50 border border-sky-200 rounded-xl p-2.5 flex items-center gap-2 text-sky-900 text-xs">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                        <span className="text-[11px] font-semibold">
+                          Bloque compatible: {targetDockName} fijado para {restriction.restriction_type === 'congelado' ? '❄️ Solo Congelado' : '🥬 Solo Refrigerado'}.
+                        </span>
+                      </div>
+                    );
+                  }
+                }
+                return null;
+              })()}
             </div>
 
             <div className="pt-4 flex gap-3 border-t border-slate-100">
@@ -4028,6 +4372,189 @@ export default function App() {
                 className="bg-[#0a5c36] hover:bg-[#08482a] text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-[#0a5c36]/20"
               >
                 {isSubmittingPassword ? 'Actualizando...' : 'Actualizar Contraseña'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal Fijación de Bloques Horarios (Congelado / Refrigerado / Mixto / Bloqueado) */}
+      {showRestrictionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowRestrictionModal(false)}></div>
+          
+          <form 
+            onSubmit={handleSaveBulkRestriction}
+            className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-7 w-full max-w-lg relative z-10 space-y-5 shadow-2xl text-slate-800 animate-fadeIn"
+          >
+            {/* Cabecera */}
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-emerald-500 text-white shadow-xs">
+                    <SlidersHorizontal className="w-4 h-4" />
+                  </span>
+                  <h3 className="font-extrabold text-lg text-slate-900">Fijar Bloques por Temperatura</h3>
+                </div>
+                <p className="text-xs text-slate-500 font-semibold mt-1">
+                  Establece restricciones de carga (Congelado / Refrigerado / Bloqueo) para horas y andenes
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRestrictionModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors font-bold text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Fecha */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Fecha de Aplicación</label>
+                <input 
+                  type="date"
+                  value={restrictionDate}
+                  onChange={(e) => setRestrictionDate(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white"
+                  required
+                />
+              </div>
+
+              {/* Andén */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Andén Destino</label>
+                <select
+                  value={restrictionDockId}
+                  onChange={(e) => setRestrictionDockId(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white cursor-pointer"
+                >
+                  <option value="todos">🌟 Todos los Andenes (1 al {docks.length || 5})</option>
+                  {docks.map(d => (
+                    <option key={d.id} value={d.id}>{d.name} ({d.status})</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Rango de Horas */}
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Hora Inicio</label>
+                  <select
+                    value={restrictionStartHour}
+                    onChange={(e) => setRestrictionStartHour(Number(e.target.value))}
+                    className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
+                  >
+                    {[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(h => (
+                      <option key={h} value={h}>{h.toString().padStart(2, '0')}:00 hrs</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Hora Término</label>
+                  <select
+                    value={restrictionEndHour}
+                    onChange={(e) => setRestrictionEndHour(Number(e.target.value))}
+                    className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
+                  >
+                    {[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(h => (
+                      <option key={h} value={h}>{h.toString().padStart(2, '0')}:00 hrs</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Tipo de Fijación de Temperatura */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Tipo de Restricción de Carga</label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setRestrictionTypeSelected('congelado')}
+                    className={`p-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      restrictionTypeSelected === 'congelado'
+                        ? 'bg-sky-50 border-sky-400 text-sky-900 shadow-sm ring-2 ring-sky-300'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-sky-50/50'
+                    }`}
+                  >
+                    <Snowflake className="w-5 h-5 text-sky-600" />
+                    <span className="text-xs font-extrabold">❄️ Solo Congelado</span>
+                    <span className="text-[10px] text-slate-400 font-semibold">Solo recepción congelados</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setRestrictionTypeSelected('refrigerado')}
+                    className={`p-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      restrictionTypeSelected === 'refrigerado'
+                        ? 'bg-emerald-50 border-emerald-400 text-emerald-900 shadow-sm ring-2 ring-emerald-300'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-emerald-50/50'
+                    }`}
+                  >
+                    <Thermometer className="w-5 h-5 text-emerald-600" />
+                    <span className="text-xs font-extrabold">🥬 Solo Refrigerado</span>
+                    <span className="text-[10px] text-slate-400 font-semibold">Solo recepción refrigerados</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setRestrictionTypeSelected('mixto')}
+                    className={`p-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      restrictionTypeSelected === 'mixto'
+                        ? 'bg-slate-100 border-slate-400 text-slate-900 shadow-sm ring-2 ring-slate-300'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <RotateCcw className="w-5 h-5 text-slate-600" />
+                    <span className="text-xs font-extrabold">🔄 Mixto / Libre</span>
+                    <span className="text-[10px] text-slate-400 font-semibold">Admite todo tipo de carga</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setRestrictionTypeSelected('bloqueado')}
+                    className={`p-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      restrictionTypeSelected === 'bloqueado'
+                        ? 'bg-red-50 border-red-400 text-red-900 shadow-sm ring-2 ring-red-300'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-red-50/50'
+                    }`}
+                  >
+                    <AlertCircle className="w-5 h-5 text-red-600" />
+                    <span className="text-xs font-extrabold">🚫 Bloquear Horario</span>
+                    <span className="text-[10px] text-slate-400 font-semibold">No disponible para recepción</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Nota / Motivo */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Motivo / Observación (Opcional)</label>
+                <input 
+                  type="text" 
+                  placeholder="Ej: Cámara de congelado al límite, mantenimiento..."
+                  value={restrictionNote}
+                  onChange={(e) => setRestrictionNote(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs w-full text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#0a5c36] focus:bg-white"
+                />
+              </div>
+            </div>
+
+            {/* Acciones */}
+            <div className="pt-3 flex gap-3 border-t border-slate-100">
+              <button 
+                type="button"
+                onClick={() => setShowRestrictionModal(false)}
+                className="bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-bold flex-1 transition-colors hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                disabled={savingRestriction}
+                className="bg-[#0a5c36] hover:bg-[#08482a] text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-[#0a5c36]/20"
+              >
+                {savingRestriction ? 'Guardando...' : 'Aplicar Restricción'}
               </button>
             </div>
           </form>
