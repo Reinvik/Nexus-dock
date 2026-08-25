@@ -23,7 +23,8 @@ import {
   Send,
   Activity,
   Building2,
-  MessageSquare
+  MessageSquare,
+  Key
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -169,12 +170,57 @@ export default function App() {
   const [citaDate, setCitaDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [citaTime, setCitaTime] = useState<string>('09:00');
   const [selectedDockIdInModal, setSelectedDockIdInModal] = useState<string>('');
-
+  
   // States para Historial de Operaciones
   const [historySearch, setHistorySearch] = useState('');
   const [historyStatus, setHistoryStatus] = useState<string>('todos');
   const [historyOpType, setHistoryOpType] = useState<string>('todos');
   const [historyCargoType, setHistoryCargoType] = useState<string>('todos');
+
+  // States para Modificar Contraseña
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
+  const [isSubmittingPassword, setIsSubmittingPassword] = useState(false);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError(null);
+    setPasswordSuccess(null);
+
+    if (newPassword.length < 6) {
+      setPasswordError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('Las contraseñas no coinciden.');
+      return;
+    }
+
+    setIsSubmittingPassword(true);
+
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+
+      setPasswordSuccess('✅ Contraseña actualizada con éxito.');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTimeout(() => {
+        setShowChangePasswordModal(false);
+        setPasswordSuccess(null);
+      }, 1800);
+    } catch (err: any) {
+      console.error('Error al actualizar contraseña:', err);
+      setPasswordError('Error al cambiar la contraseña: ' + (err.message || 'Intente nuevamente.'));
+    } finally {
+      setIsSubmittingPassword(false);
+    }
+  };
+
   const [historyPage, setHistoryPage] = useState(1);
   const HISTORY_PAGE_SIZE = 15;
 
@@ -1328,11 +1374,19 @@ export default function App() {
           </div>
         </nav>
 
-        {/* Cerrar Sesión */}
-        <div className="p-4 border-t border-white/10 bg-[#08482a]">
+        {/* Usuario & Opciones de Cuenta */}
+        <div className="p-3 border-t border-white/10 bg-[#08482a] space-y-1">
+          <button
+            onClick={() => setShowChangePasswordModal(true)}
+            className="flex items-center gap-2 w-full text-emerald-100 hover:text-white hover:bg-white/10 px-3 py-2 rounded-xl transition-all cursor-pointer font-bold text-xs"
+            title="Cambiar contraseña de la cuenta"
+          >
+            <Key className="w-3.5 h-3.5 shrink-0 text-cyan-300" />
+            <span>Modificar Contraseña</span>
+          </button>
           <button
             onClick={() => supabase.auth.signOut()}
-            className="flex items-center gap-1.5 w-full text-red-300 hover:text-red-200 hover:bg-red-900/20 px-2.5 py-2 rounded-xl transition-all cursor-pointer font-bold text-xs"
+            className="flex items-center gap-2 w-full text-red-300 hover:text-red-200 hover:bg-red-900/20 px-3 py-2 rounded-xl transition-all cursor-pointer font-bold text-xs"
             title="Cerrar sesión"
           >
             <LogOut className="w-3.5 h-3.5 shrink-0" />
@@ -3725,6 +3779,85 @@ export default function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Modal Modificar Contraseña */}
+      {showChangePasswordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div 
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" 
+            onClick={() => { setShowChangePasswordModal(false); setPasswordError(null); setPasswordSuccess(null); }} 
+          />
+          
+          <form 
+            onSubmit={handleChangePassword}
+            className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 w-full max-w-md relative z-10 space-y-5 shadow-2xl text-slate-800 animate-fadeIn"
+          >
+            <div className="border-b border-slate-100 pb-3">
+              <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-emerald-200">
+                Seguridad de la Cuenta
+              </span>
+              <h3 className="font-extrabold text-xl text-slate-900 mt-1">Modificar Contraseña</h3>
+              <p className="text-xs text-slate-500 font-semibold">Ingrese su nueva contraseña para actualizar el acceso.</p>
+            </div>
+
+            {passwordError && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-700 font-bold animate-fadeIn">
+                {passwordError}
+              </div>
+            )}
+
+            {passwordSuccess && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800 font-bold animate-fadeIn">
+                {passwordSuccess}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Nueva Contraseña</label>
+                <input 
+                  type="password" 
+                  placeholder="Mínimo 6 caracteres"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white"
+                  minLength={6}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Confirmar Nueva Contraseña</label>
+                <input 
+                  type="password" 
+                  placeholder="Repita la nueva contraseña"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white"
+                  minLength={6}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="pt-3 flex gap-3 border-t border-slate-100">
+              <button 
+                type="button"
+                onClick={() => { setShowChangePasswordModal(false); setPasswordError(null); setPasswordSuccess(null); }}
+                className="bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-bold flex-1 transition-colors hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                disabled={isSubmittingPassword}
+                className="bg-[#0a5c36] hover:bg-[#08482a] text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-[#0a5c36]/20"
+              >
+                {isSubmittingPassword ? 'Actualizando...' : 'Actualizar Contraseña'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>
