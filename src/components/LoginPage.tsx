@@ -34,7 +34,8 @@ export default function LoginPage({ onDriverClick }: { onDriverClick: () => void
 
     setLoading(true);
     try {
-      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      const cleanEmail = email.trim().toLowerCase();
+      const { error: authError } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
       if (authError) {
         if (authError.message.includes('Email not confirmed')) {
           setError('Tu correo aún no ha sido verificado. Revisa tu bandeja de entrada de @cial.cl.');
