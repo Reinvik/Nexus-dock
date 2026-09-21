@@ -30,12 +30,35 @@ import {
   Thermometer,
   Snowflake,
   SlidersHorizontal,
-  UtensilsCrossed
+  UtensilsCrossed,
+  Users,
+  UserPlus,
+  ShieldCheck,
+  Shield,
+  KeyRound,
+  LockOpen,
+  UserCheck,
+  UserX,
+  Crown,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
 
 export type RestrictionType = 'mixto' | 'congelado' | 'refrigerado' | 'bloqueado';
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  role: string;
+  email_confirmed: boolean;
+  last_sign_in_at: string | null;
+  created_at: string;
+  is_banned: boolean;
+  app_metadata: Record<string, any>;
+  user_metadata: Record<string, any>;
+}
 
 export interface ScheduleRestriction {
   id?: string;
@@ -162,7 +185,7 @@ const formatWhatsAppUrl = (phone: string | null | undefined, driverName: string,
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'yard' | 'planta2' | 'scheduler' | 'history' | 'reports'>('yard');
+  const [activeTab, setActiveTab] = useState<'yard' | 'planta2' | 'scheduler' | 'history' | 'reports' | 'users'>('yard');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showPlanta2AddModal, setShowPlanta2AddModal] = useState(false);
   const [isPlanta2HeaderCollapsed, setIsPlanta2HeaderCollapsed] = useState<boolean>(() => {
@@ -189,6 +212,31 @@ export default function App() {
   const [docks, setDocks] = useState<Dock[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+
+  // States para Módulo Nexus Owner - Usuarios
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [loadingAdminUsers, setLoadingAdminUsers] = useState(false);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userDomainFilter, setUserDomainFilter] = useState<'all' | 'cial' | 'other'>('all');
+  const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'banned'>('all');
+  
+  // Modales de administración de usuarios
+  const [selectedUserForPassword, setSelectedUserForPassword] = useState<AdminUser | null>(null);
+  const [adminNewPassword, setAdminNewPassword] = useState('');
+  const [adminConfirmPassword, setAdminConfirmPassword] = useState('');
+  const [showAdminPasswordPlain, setShowAdminPasswordPlain] = useState(false);
+  const [savingAdminPassword, setSavingAdminPassword] = useState(false);
+  const [adminPasswordSuccess, setAdminPasswordSuccess] = useState<string | null>(null);
+  const [adminPasswordError, setAdminPasswordError] = useState<string | null>(null);
+
+  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('Cial2026!');
+  const [showNewUserPasswordPlain, setShowNewUserPasswordPlain] = useState(false);
+  const [newUserRole, setNewUserRole] = useState('Operador Inbound');
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [createUserError, setCreateUserError] = useState<string | null>(null);
+  const [createUserSuccess, setCreateUserSuccess] = useState<string | null>(null);
 
   // Campos del modal de ingreso
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
@@ -346,6 +394,131 @@ export default function App() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Cargar usuarios cuando se selecciona la pestaña de usuarios
+  useEffect(() => {
+    if (activeTab === 'users') {
+      fetchAdminUsers();
+    }
+  }, [activeTab]);
+
+  const fetchAdminUsers = async () => {
+    setLoadingAdminUsers(true);
+    try {
+      const { data, error } = await supabase.rpc('admin_get_users');
+      if (error) throw error;
+      setAdminUsers(data || []);
+    } catch (err: any) {
+      console.error('Error al cargar usuarios de administración:', err);
+    } finally {
+      setLoadingAdminUsers(false);
+    }
+  };
+
+  const handleAdminChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUserForPassword) return;
+    setAdminPasswordError(null);
+    setAdminPasswordSuccess(null);
+
+    if (adminNewPassword.length < 6) {
+      setAdminPasswordError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (adminNewPassword !== adminConfirmPassword) {
+      setAdminPasswordError('Las contraseñas no coinciden.');
+      return;
+    }
+
+    setSavingAdminPassword(true);
+    try {
+      const { data, error } = await supabase.rpc('admin_set_user_password', {
+        target_user_id: selectedUserForPassword.id,
+        new_password: adminNewPassword
+      });
+
+      if (error) throw error;
+      if (data && !data.success) {
+        throw new Error(data.error || 'Error al cambiar contraseña');
+      }
+
+      setAdminPasswordSuccess(`✅ Contraseña actualizada exitosamente para ${selectedUserForPassword.email}`);
+      setTimeout(() => {
+        setSelectedUserForPassword(null);
+        setAdminNewPassword('');
+        setAdminConfirmPassword('');
+        setAdminPasswordSuccess(null);
+      }, 1500);
+      fetchAdminUsers();
+    } catch (err: any) {
+      console.error('Error in admin_set_user_password:', err);
+      setAdminPasswordError(err.message || 'Error al actualizar contraseña.');
+    } finally {
+      setSavingAdminPassword(false);
+    }
+  };
+
+  const handleAdminCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateUserError(null);
+    setCreateUserSuccess(null);
+
+    if (!newUserEmail.includes('@')) {
+      setCreateUserError('Por favor ingresa un correo electrónico válido.');
+      return;
+    }
+    if (newUserPassword.length < 6) {
+      setCreateUserError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+
+    setCreatingUser(true);
+    try {
+      const { data, error } = await supabase.rpc('admin_create_user', {
+        new_email: newUserEmail.trim().toLowerCase(),
+        new_password: newUserPassword,
+        new_role: newUserRole
+      });
+
+      if (error) throw error;
+      if (data && !data.success) {
+        throw new Error(data.error || 'Error al crear usuario');
+      }
+
+      setCreateUserSuccess(`✅ Usuario ${newUserEmail} creado y confirmado exitosamente.`);
+      setNewUserEmail('');
+      setNewUserPassword('Cial2026!');
+      setTimeout(() => {
+        setShowCreateUserModal(false);
+        setCreateUserSuccess(null);
+      }, 1500);
+      fetchAdminUsers();
+    } catch (err: any) {
+      console.error('Error in admin_create_user:', err);
+      setCreateUserError(err.message || 'Error al crear usuario.');
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  const handleAdminToggleBan = async (user: AdminUser) => {
+    const action = user.is_banned ? 'desbloquear' : 'bloquear';
+    if (!window.confirm(`¿Estás seguro de que deseas ${action} el acceso para ${user.email}?`)) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase.rpc('admin_toggle_user_ban', {
+        target_user_id: user.id,
+        should_ban: !user.is_banned
+      });
+      if (error) throw error;
+      fetchAdminUsers();
+    } catch (err: any) {
+      console.error('Error toggling user ban:', err);
+      alert('Error al modificar estado del usuario: ' + err.message);
+    }
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -1724,6 +1897,25 @@ export default function App() {
               Reportes de Eficiencia
             </button>
           </div>
+
+          <div className="pt-4 border-t border-white/10 mt-4">
+            <span className="px-4 text-[10px] font-bold text-amber-300/90 uppercase tracking-widest block mb-2 flex items-center gap-1.5">
+              <Crown className="w-3 h-3 text-amber-400" />
+              Nexus Owner
+            </span>
+            <button
+              onClick={() => setActiveTab('users')}
+              className={`flex items-center justify-between w-full px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'users' ? 'bg-amber-400/20 text-amber-200 shadow-sm ring-1 ring-amber-400/40' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
+            >
+              <div className="flex items-center gap-3">
+                <Users className="w-4 h-4 shrink-0 text-amber-400" />
+                <span>Gestión Usuarios</span>
+              </div>
+              <span className="bg-amber-400 text-slate-950 text-[9px] px-1.5 py-0.2 rounded font-black uppercase">
+                Owner
+              </span>
+            </button>
+          </div>
         </nav>
 
         {/* Usuario & Opciones de Cuenta */}
@@ -1762,11 +1954,13 @@ export default function App() {
                 {activeTab === 'scheduler' && 'Matriz de Agendamiento de Andenes'}
                 {activeTab === 'history' && 'Historial de Operaciones'}
                 {activeTab === 'reports' && 'Reportes & Métricas de Eficiencia'}
+                {activeTab === 'users' && 'Gestión de Usuarios Activos & Contraseñas'}
               </h1>
               <span className={`text-[8px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded-full leading-none border ${
-                activeTab === 'planta2' ? 'bg-cyan-50 border-cyan-200 text-cyan-800' : 'bg-emerald-50 border-emerald-100 text-emerald-700'
+                activeTab === 'planta2' ? 'bg-cyan-50 border-cyan-200 text-cyan-800' : 
+                activeTab === 'users' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-100 text-emerald-700'
               }`}>
-                {activeTab === 'planta2' ? 'Planta 2' : 'Vista Monitor'}
+                {activeTab === 'planta2' ? 'Planta 2' : activeTab === 'users' ? 'Nexus Owner' : 'Vista Monitor'}
               </span>
             </div>
             <div className="text-[10px] text-slate-500 font-semibold flex items-center gap-1 mt-1 leading-none">
@@ -3376,7 +3570,7 @@ export default function App() {
               })()}
             </section>
 
-          ) : (
+          ) : activeTab === 'reports' ? (
 
             /* ====================================================
                PESTAÑA: REPORTES DE EFICIENCIA
@@ -3592,7 +3786,336 @@ export default function App() {
               );
             })()
 
-          )}
+          ) : activeTab === 'users' ? (
+            /* ====================================================
+               PESTAÑA: GESTIÓN DE USUARIOS (NEXUS OWNER)
+               ==================================================== */
+            (() => {
+              const cialUsersCount = adminUsers.filter(u => u.email.endsWith('@cial.cl')).length;
+              const activeCount = adminUsers.filter(u => !u.is_banned).length;
+              const bannedCount = adminUsers.filter(u => u.is_banned).length;
+              const recentLoginsCount = adminUsers.filter(u => {
+                if (!u.last_sign_in_at) return false;
+                const diffDays = (new Date().getTime() - new Date(u.last_sign_in_at).getTime()) / (1000 * 3600 * 24);
+                return diffDays <= 7;
+              }).length;
+
+              const filteredUsers = adminUsers.filter(u => {
+                const matchesSearch = !userSearchQuery.trim() || 
+                  u.email.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
+                  u.role.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
+                  u.id.toLowerCase().includes(userSearchQuery.toLowerCase());
+                
+                let matchesDomain = true;
+                if (userDomainFilter === 'cial') {
+                  matchesDomain = u.email.toLowerCase().endsWith('@cial.cl');
+                } else if (userDomainFilter === 'other') {
+                  matchesDomain = !u.email.toLowerCase().endsWith('@cial.cl');
+                }
+
+                let matchesStatus = true;
+                if (userStatusFilter === 'active') {
+                  matchesStatus = !u.is_banned;
+                } else if (userStatusFilter === 'banned') {
+                  matchesStatus = u.is_banned;
+                }
+
+                return matchesSearch && matchesDomain && matchesStatus;
+              });
+
+              return (
+                <section className="space-y-5">
+                  {/* Header del Módulo */}
+                  <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-700 text-white flex items-center justify-center shadow-md">
+                          <Crown className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h2 className="text-xl font-black text-slate-900">Control de Usuarios & Accesos</h2>
+                            <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                              Nexus Owner
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 font-semibold">
+                            Monitoreo de cuentas activas, restablecimiento directo de contraseñas y permisos
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={fetchAdminUsers}
+                        disabled={loadingAdminUsers}
+                        className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer"
+                        title="Refrescar lista de usuarios"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${loadingAdminUsers ? 'animate-spin' : ''}`} />
+                        <span>Actualizar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewUserEmail('');
+                          setNewUserPassword('Cial2026!');
+                          setCreateUserError(null);
+                          setCreateUserSuccess(null);
+                          setShowCreateUserModal(true);
+                        }}
+                        className="flex items-center gap-2 bg-[#0a5c36] hover:bg-[#08482a] text-white px-4 py-2.5 rounded-xl text-xs font-black shadow-md shadow-[#0a5c36]/20 transition-all active:scale-95 cursor-pointer"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        <span>+ Crear Usuario</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* KPI Cards */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-white border border-slate-200 p-5 rounded-3xl shadow-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Total Usuarios</span>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{adminUsers.length}</p>
+                        <span className="text-[10px] text-emerald-600 font-bold">En base de datos</span>
+                      </div>
+                      <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center">
+                        <Users className="w-6 h-6" />
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-5 rounded-3xl shadow-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Cuentas @cial.cl</span>
+                        <p className="text-2xl font-black text-emerald-700 mt-1">{cialUsersCount}</p>
+                        <span className="text-[10px] text-slate-400 font-semibold">Acceso corporativo</span>
+                      </div>
+                      <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                        <ShieldCheck className="w-6 h-6" />
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-5 rounded-3xl shadow-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Activos Últimos 7 Días</span>
+                        <p className="text-2xl font-black text-cyan-700 mt-1">{recentLoginsCount}</p>
+                        <span className="text-[10px] text-cyan-600 font-bold">Sesiones recientes</span>
+                      </div>
+                      <div className="w-12 h-12 rounded-2xl bg-cyan-50 text-cyan-700 flex items-center justify-center">
+                        <Clock className="w-6 h-6" />
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-5 rounded-3xl shadow-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Estado Acceso</span>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{activeCount} / {bannedCount}</p>
+                        <span className="text-[10px] text-slate-500 font-semibold">{activeCount} habilitados · {bannedCount} bloqueados</span>
+                      </div>
+                      <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-700 flex items-center justify-center">
+                        <KeyRound className="w-6 h-6" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Barra de Filtros */}
+                  <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs flex flex-wrap gap-3 items-center justify-between">
+                    <div className="relative flex-1 min-w-[240px]">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input 
+                        type="text"
+                        placeholder="Buscar por correo electrónico o rol..."
+                        value={userSearchQuery}
+                        onChange={(e) => setUserSearchQuery(e.target.value)}
+                        className="bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs w-full font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#0a5c36] focus:bg-white"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setUserDomainFilter('all')}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            userDomainFilter === 'all' ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          Todos los Dominios
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserDomainFilter('cial')}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            userDomainFilter === 'cial' ? 'bg-[#0a5c36] text-white shadow-xs' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          Solo @cial.cl
+                        </button>
+                      </div>
+
+                      <select
+                        value={userStatusFilter}
+                        onChange={(e) => setUserStatusFilter(e.target.value as any)}
+                        className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36] cursor-pointer"
+                      >
+                        <option value="all">Estado: Todos</option>
+                        <option value="active">Estado: Habilitados</option>
+                        <option value="banned">Estado: Bloqueados</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Tabla de Usuarios */}
+                  <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                            <th className="py-4 px-6">Usuario / Correo</th>
+                            <th className="py-4 px-6">Rol / Permiso</th>
+                            <th className="py-4 px-6">Último Inicio de Sesión</th>
+                            <th className="py-4 px-6">Fecha Registro</th>
+                            <th className="py-4 px-6 text-center">Estado</th>
+                            <th className="py-4 px-6 text-right">Acciones Owner</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {filteredUsers.map((u) => {
+                            const isCial = u.email.toLowerCase().endsWith('@cial.cl');
+                            const isOwner = u.email.toLowerCase().includes('ariel.mella') || u.email.toLowerCase().includes('reinvik');
+
+                            return (
+                              <tr key={u.id} className="hover:bg-slate-50/80 transition-colors">
+                                <td className="py-4 px-6">
+                                  <div className="flex items-center gap-3">
+                                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-xs shrink-0 ${
+                                      isOwner ? 'bg-amber-100 text-amber-900 border border-amber-300' :
+                                      isCial ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-slate-100 text-slate-700'
+                                    }`}>
+                                      {u.email.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-extrabold text-slate-800 text-xs truncate">
+                                          {u.email}
+                                        </span>
+                                        {isOwner && (
+                                          <span className="bg-amber-100 text-amber-900 text-[9px] font-black px-1.5 py-0.2 rounded border border-amber-300">
+                                            Owner
+                                          </span>
+                                        )}
+                                        {isCial && !isOwner && (
+                                          <span className="bg-emerald-50 text-emerald-800 text-[9px] font-black px-1.5 py-0.2 rounded border border-emerald-200">
+                                            CiAL
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="text-[10px] font-mono text-slate-400 block mt-0.5">
+                                        ID: {u.id.slice(0, 13)}...
+                                      </span>
+                                    </div>
+                                  </div>
+                                </td>
+
+                                <td className="py-4 px-6">
+                                  <span className="inline-flex items-center gap-1.5 font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-xl text-[11px] border border-slate-200">
+                                    <Shield className="w-3 h-3 text-[#0a5c36]" />
+                                    {u.user_metadata?.role || u.app_metadata?.role || (isOwner ? 'Nexus Owner' : 'Operador')}
+                                  </span>
+                                </td>
+
+                                <td className="py-4 px-6">
+                                  {u.last_sign_in_at ? (
+                                    <div>
+                                      <span className="font-bold text-slate-700 block">
+                                        {new Date(u.last_sign_in_at).toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 font-semibold font-mono">
+                                        {new Date(u.last_sign_in_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 font-medium italic text-[11px]">Sin registros</span>
+                                  )}
+                                </td>
+
+                                <td className="py-4 px-6 text-slate-500 font-semibold">
+                                  {new Date(u.created_at).toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                </td>
+
+                                <td className="py-4 px-6 text-center">
+                                  {u.is_banned ? (
+                                    <span className="inline-flex items-center gap-1 bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-full text-[10px] font-black">
+                                      <UserX className="w-3 h-3" />
+                                      Bloqueado
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full text-[10px] font-black">
+                                      <UserCheck className="w-3 h-3" />
+                                      Activo
+                                    </span>
+                                  )}
+                                </td>
+
+                                <td className="py-4 px-6 text-right">
+                                  <div className="flex items-center justify-end gap-2">
+                                    {/* Botón Cambiar Contraseña */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedUserForPassword(u);
+                                        setAdminNewPassword('');
+                                        setAdminConfirmPassword('');
+                                        setAdminPasswordError(null);
+                                        setAdminPasswordSuccess(null);
+                                        setShowAdminPasswordPlain(false);
+                                      }}
+                                      className="inline-flex items-center gap-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-2xs"
+                                      title="Cambiar contraseña de este usuario directamente"
+                                    >
+                                      <KeyRound className="w-3.5 h-3.5 text-sky-600" />
+                                      <span>Cambiar Clave</span>
+                                    </button>
+
+                                    {/* Botón Bloquear / Desbloquear */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleAdminToggleBan(u)}
+                                      className={`p-1.5 rounded-xl border transition-all cursor-pointer ${
+                                        u.is_banned
+                                          ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                                          : 'bg-red-50 hover:bg-red-100 text-red-700 border-red-200'
+                                      }`}
+                                      title={u.is_banned ? 'Desbloquear acceso' : 'Bloquear acceso'}
+                                    >
+                                      {u.is_banned ? <LockOpen className="w-4 h-4" /> : <UserX className="w-4 h-4" />}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                          {filteredUsers.length === 0 && (
+                            <tr>
+                              <td colSpan={6} className="py-12 text-center text-slate-400 font-semibold">
+                                {loadingAdminUsers ? 'Cargando usuarios desde Supabase...' : 'No se encontraron usuarios que coincidan con la búsqueda.'}
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </section>
+              );
+            })()
+
+          ) : null}
         </main>
       </div>
 
@@ -5118,6 +5641,231 @@ export default function App() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Modal Admin: Cambiar Contraseña de Usuario */}
+      {selectedUserForPassword && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedUserForPassword(null)}></div>
+          
+          <form 
+            onSubmit={handleAdminChangePassword}
+            className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-7 w-full max-w-md relative z-10 space-y-4 shadow-2xl text-slate-800 animate-fadeIn"
+          >
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-2xl bg-sky-100 text-sky-800">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900">Cambiar Contraseña</h3>
+                  <p className="text-xs text-slate-500 font-semibold">{selectedUserForPassword.email}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedUserForPassword(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors font-bold text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {adminPasswordError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{adminPasswordError}</span>
+              </div>
+            )}
+
+            {adminPasswordSuccess && (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 font-bold">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                <span>{adminPasswordSuccess}</span>
+              </div>
+            )}
+
+            <div className="space-y-3 pt-1">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider">Nueva Contraseña</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const sample = 'Cial2026!';
+                      setAdminNewPassword(sample);
+                      setAdminConfirmPassword(sample);
+                      setShowAdminPasswordPlain(true);
+                    }}
+                    className="text-[10px] text-[#0a5c36] font-bold hover:underline cursor-pointer"
+                  >
+                    Usar predeterminada (Cial2026!)
+                  </button>
+                </div>
+                <div className="relative">
+                  <input 
+                    type={showAdminPasswordPlain ? "text" : "password"} 
+                    placeholder="Mínimo 6 caracteres"
+                    value={adminNewPassword}
+                    onChange={(e) => setAdminNewPassword(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white pr-10"
+                    minLength={6}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPasswordPlain(!showAdminPasswordPlain)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    {showAdminPasswordPlain ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Confirmar Nueva Contraseña</label>
+                <input 
+                  type={showAdminPasswordPlain ? "text" : "password"} 
+                  placeholder="Repetir nueva contraseña"
+                  value={adminConfirmPassword}
+                  onChange={(e) => setAdminConfirmPassword(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white"
+                  minLength={6}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="pt-3 flex gap-3 border-t border-slate-100">
+              <button 
+                type="button"
+                onClick={() => setSelectedUserForPassword(null)}
+                className="bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-bold flex-1 transition-colors hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                disabled={savingAdminPassword}
+                className="bg-[#0a5c36] hover:bg-[#08482a] text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-[#0a5c36]/20"
+              >
+                {savingAdminPassword ? 'Guardando...' : 'Guardar Contraseña'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal Admin: Crear Nuevo Usuario */}
+      {showCreateUserModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowCreateUserModal(false)}></div>
+          
+          <form 
+            onSubmit={handleAdminCreateUser}
+            className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-7 w-full max-w-md relative z-10 space-y-4 shadow-2xl text-slate-800 animate-fadeIn"
+          >
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-2xl bg-emerald-100 text-emerald-800">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900">Crear Nuevo Usuario</h3>
+                  <p className="text-xs text-slate-500 font-semibold">Confirmación automática instantánea</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateUserModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors font-bold text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {createUserError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{createUserError}</span>
+              </div>
+            )}
+
+            {createUserSuccess && (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 font-bold">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                <span>{createUserSuccess}</span>
+              </div>
+            )}
+
+            <div className="space-y-3 pt-1">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Correo Electrónico</label>
+                <input 
+                  type="email" 
+                  placeholder="ejemplo.nombre@cial.cl"
+                  value={newUserEmail}
+                  onChange={(e) => setNewUserEmail(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Contraseña Inicial</label>
+                <div className="relative">
+                  <input 
+                    type={showNewUserPasswordPlain ? "text" : "password"} 
+                    placeholder="Mínimo 6 caracteres"
+                    value={newUserPassword}
+                    onChange={(e) => setNewUserPassword(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white pr-10"
+                    minLength={6}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewUserPasswordPlain(!showNewUserPasswordPlain)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    {showNewUserPasswordPlain ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Rol / Asignación</label>
+                <select
+                  value={newUserRole}
+                  onChange={(e) => setNewUserRole(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full font-bold text-slate-800 focus:outline-none focus:border-[#0a5c36] focus:bg-white cursor-pointer"
+                >
+                  <option value="Operador Inbound">Operador Inbound</option>
+                  <option value="Operador Planta 2">Operador Planta 2</option>
+                  <option value="Supervisor CD">Supervisor CD</option>
+                  <option value="Administrador">Administrador</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="pt-3 flex gap-3 border-t border-slate-100">
+              <button 
+                type="button"
+                onClick={() => setShowCreateUserModal(false)}
+                className="bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-bold flex-1 transition-colors hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                disabled={creatingUser}
+                className="bg-[#0a5c36] hover:bg-[#08482a] text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-[#0a5c36]/20"
+              >
+                {creatingUser ? 'Creando...' : 'Crear Usuario'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>
