@@ -70,7 +70,7 @@ function Root() {
 
   // 2. Si no está activo, flujo normal de auth
   return user ? (
-    <App />
+    <App currentUser={user} />
   ) : (
     <LoginPage 
       onDriverClick={() => {
