@@ -43,7 +43,7 @@ import {
   Eye,
   EyeOff
 } from 'lucide-react';
-import { supabase } from './lib/supabase';
+import { supabase, supabaseMain } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
 
 export type RestrictionType = 'mixto' | 'congelado' | 'refrigerado' | 'bloqueado';
@@ -363,7 +363,16 @@ export default function App() {
       const { error } = await supabase.auth.updateUser({ password: newPassword });
       if (error) throw error;
 
-      setPasswordSuccess('✅ Contraseña actualizada con éxito.');
+      // Sincronizar en ambas bases de datos para que funcione idéntico en despacho y dock
+      const { data: { user: curUser } } = await supabase.auth.getUser();
+      if (curUser?.email) {
+        await Promise.allSettled([
+          supabase.rpc('admin_set_user_password_by_email', { target_email: curUser.email, new_password: newPassword }),
+          supabaseMain.rpc('admin_set_user_password_by_email', { target_email: curUser.email, new_password: newPassword })
+        ]);
+      }
+
+      setPasswordSuccess('✅ Contraseña actualizada con éxito en ambas plataformas.');
       setNewPassword('');
       setConfirmPassword('');
       setTimeout(() => {
@@ -405,9 +414,33 @@ export default function App() {
   const fetchAdminUsers = async () => {
     setLoadingAdminUsers(true);
     try {
-      const { data, error } = await supabase.rpc('admin_get_users');
-      if (error) throw error;
-      setAdminUsers(data || []);
+      // Consultar tanto en cliente actual como en supabaseMain (despacho) para garantizar visualización de todos los usuarios
+      const [resCurrent, resMain] = await Promise.allSettled([
+        supabase.rpc('admin_get_users'),
+        supabaseMain.rpc('admin_get_users')
+      ]);
+
+      const usersMap = new Map<string, AdminUser>();
+
+      if (resCurrent.status === 'fulfilled' && resCurrent.value.data) {
+        resCurrent.value.data.forEach((u: AdminUser) => usersMap.set(u.email.toLowerCase(), u));
+      }
+      if (resMain.status === 'fulfilled' && resMain.value.data) {
+        resMain.value.data.forEach((u: AdminUser) => {
+          const key = u.email.toLowerCase();
+          if (!usersMap.has(key)) {
+            usersMap.set(key, u);
+          } else {
+            const existing = usersMap.get(key)!;
+            if (u.last_sign_in_at && (!existing.last_sign_in_at || new Date(u.last_sign_in_at) > new Date(existing.last_sign_in_at))) {
+              usersMap.set(key, { ...existing, last_sign_in_at: u.last_sign_in_at });
+            }
+          }
+        });
+      }
+
+      const merged = Array.from(usersMap.values());
+      setAdminUsers(merged);
     } catch (err: any) {
       console.error('Error al cargar usuarios de administración:', err);
     } finally {
@@ -432,23 +465,35 @@ export default function App() {
 
     setSavingAdminPassword(true);
     try {
-      const { data, error } = await supabase.rpc('admin_set_user_password', {
-        target_user_id: selectedUserForPassword.id,
-        new_password: adminNewPassword
-      });
+      // Sincronizar actualización de contraseña en AMBAS bases de datos (dock y despacho) por correo
+      const [r1, r2] = await Promise.allSettled([
+        supabase.rpc('admin_set_user_password_by_email', {
+          target_email: selectedUserForPassword.email,
+          new_password: adminNewPassword
+        }),
+        supabaseMain.rpc('admin_set_user_password_by_email', {
+          target_email: selectedUserForPassword.email,
+          new_password: adminNewPassword
+        })
+      ]);
 
-      if (error) throw error;
-      if (data && !data.success) {
-        throw new Error(data.error || 'Error al cambiar contraseña');
+      const success = (r1.status === 'fulfilled' && r1.value.data?.success) || 
+                      (r2.status === 'fulfilled' && r2.value.data?.success);
+
+      if (!success) {
+        const errMsg = (r1.status === 'fulfilled' ? r1.value.data?.error : null) ||
+                       (r2.status === 'fulfilled' ? r2.value.data?.error : null) ||
+                       'Error al cambiar contraseña';
+        throw new Error(errMsg);
       }
 
-      setAdminPasswordSuccess(`✅ Contraseña actualizada exitosamente para ${selectedUserForPassword.email}`);
+      setAdminPasswordSuccess(`✅ Contraseña actualizada exitosamente para ${selectedUserForPassword.email} (válida en Despacho y Dock)`);
       setTimeout(() => {
         setSelectedUserForPassword(null);
         setAdminNewPassword('');
         setAdminConfirmPassword('');
         setAdminPasswordSuccess(null);
-      }, 1500);
+      }, 1800);
       fetchAdminUsers();
     } catch (err: any) {
       console.error('Error in admin_set_user_password:', err);
@@ -474,24 +519,38 @@ export default function App() {
 
     setCreatingUser(true);
     try {
-      const { data, error } = await supabase.rpc('admin_create_user', {
-        new_email: newUserEmail.trim().toLowerCase(),
-        new_password: newUserPassword,
-        new_role: newUserRole
-      });
+      // Crear en ambas bases de datos con la misma contraseña y confirmación automática
+      const cleanEmail = newUserEmail.trim().toLowerCase();
+      const [r1, r2] = await Promise.allSettled([
+        supabase.rpc('admin_create_user', {
+          new_email: cleanEmail,
+          new_password: newUserPassword,
+          new_role: newUserRole
+        }),
+        supabaseMain.rpc('admin_create_user', {
+          new_email: cleanEmail,
+          new_password: newUserPassword,
+          new_role: newUserRole
+        })
+      ]);
 
-      if (error) throw error;
-      if (data && !data.success) {
-        throw new Error(data.error || 'Error al crear usuario');
+      const success = (r1.status === 'fulfilled' && r1.value.data?.success) || 
+                      (r2.status === 'fulfilled' && r2.value.data?.success);
+
+      if (!success) {
+        const errMsg = (r1.status === 'fulfilled' ? r1.value.data?.error : null) ||
+                       (r2.status === 'fulfilled' ? r2.value.data?.error : null) ||
+                       'Error al crear usuario';
+        throw new Error(errMsg);
       }
 
-      setCreateUserSuccess(`✅ Usuario ${newUserEmail} creado y confirmado exitosamente.`);
+      setCreateUserSuccess(`✅ Usuario ${newUserEmail} creado y confirmado en Despacho y Dock.`);
       setNewUserEmail('');
       setNewUserPassword('Cial2026!');
       setTimeout(() => {
         setShowCreateUserModal(false);
         setCreateUserSuccess(null);
-      }, 1500);
+      }, 1800);
       fetchAdminUsers();
     } catch (err: any) {
       console.error('Error in admin_create_user:', err);
@@ -508,11 +567,10 @@ export default function App() {
     }
 
     try {
-      const { error } = await supabase.rpc('admin_toggle_user_ban', {
-        target_user_id: user.id,
-        should_ban: !user.is_banned
-      });
-      if (error) throw error;
+      await Promise.allSettled([
+        supabase.rpc('admin_toggle_user_ban', { target_user_id: user.id, should_ban: !user.is_banned }),
+        supabaseMain.rpc('admin_toggle_user_ban', { target_user_id: user.id, should_ban: !user.is_banned })
+      ]);
       fetchAdminUsers();
     } catch (err: any) {
       console.error('Error toggling user ban:', err);

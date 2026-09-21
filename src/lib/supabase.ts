@@ -52,3 +52,13 @@ console.log(`[Multi-Tenant] Esquema de base de datos resuelto contextualmente: "
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   db: { schema: resolvedSchema }
 });
+
+// Clientes específicos para sincronización con despacho.nexusnetwork.cl (MAIN) y dock.nexusnetwork.cl (PROD)
+export const MAIN_SUPABASE_URL = 'https://iuzpgljjfeobxlptmsma.supabase.co';
+export const MAIN_SUPABASE_ANON_KEY = 'sb_publishable_SPDWhx5zkQ9y3SiG6FXUhA_1A6ylpl7';
+export const PROD_SUPABASE_URL = 'https://qtzpzgwyjptbnipvyjdu.supabase.co';
+export const PROD_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF0enB6Z3d5anB0Ym5pcHZ5amR1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU4NDY4MDAsImV4cCI6MjA4MTQyMjgwMH0.An72d0glXpf6RZR5nwQ9OnLeU00loVqkZkNjUJhICA4';
+
+export const supabaseMain = createClient(MAIN_SUPABASE_URL, MAIN_SUPABASE_ANON_KEY);
+export const supabaseProd = createClient(PROD_SUPABASE_URL, PROD_SUPABASE_ANON_KEY);
+
