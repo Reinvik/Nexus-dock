@@ -1213,6 +1213,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
           phone: driverPhone.trim(),
           tractor_plate: finalTractor,
           trailer_plate: finalTrailer || null,
+          patent: finalTractor,
           carrier: carrierVal,
           type: operationType,
           status: targetStatus,
@@ -1227,7 +1228,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       fetchData();
     } catch (err: any) {
       console.error('Error ingresando camión:', err);
-      setErrorMsg('No se pudo registrar la operación en la base de datos.');
+      setErrorMsg('No se pudo registrar la operación en la base de datos: ' + (err.message || ''));
       setTrucks(prev => prev.filter(t => t.id !== tempId));
     }
 
