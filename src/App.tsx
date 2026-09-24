@@ -200,16 +200,14 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(propUser ?? null);
 
   useEffect(() => {
-    if (!currentUser) {
+    if (propUser) {
+      setCurrentUser(propUser);
+    } else {
       supabase.auth.getUser().then(({ data: { user } }) => {
         if (user) setCurrentUser(user);
       });
     }
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCurrentUser(session?.user ?? null);
-    });
-    return () => subscription.unsubscribe();
-  }, [currentUser]);
+  }, [propUser]);
 
   const isNexusOwner = isUserOwner(currentUser?.email);
 
