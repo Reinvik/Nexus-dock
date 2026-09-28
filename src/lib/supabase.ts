@@ -23,14 +23,14 @@ const getDbSchema = (): string => {
     }
   }
   
-  // 2. En desarrollo local (localhost, localhost IP, o IP de red local), usar public por defecto si no hay query param
+  // 2. En desarrollo local o fallback, usar dock por defecto
   if (
     hostname.includes('localhost') || 
     hostname.includes('127.0.0.1') || 
     hostname.startsWith('192.168.') || 
     hostname.startsWith('10.')
   ) {
-    return 'public';
+    return 'dock';
   }
 
   // 3. En producción, extraer el primer subdominio (ej: dock.nexusnetwork.cl -> dock)
@@ -43,7 +43,7 @@ const getDbSchema = (): string => {
     }
   }
 
-  return 'public';
+  return 'dock';
 };
 
 const resolvedSchema = getDbSchema();

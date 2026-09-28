@@ -41,7 +41,8 @@ import {
   UserX,
   Crown,
   Eye,
-  EyeOff
+  EyeOff,
+  Edit2
 } from 'lucide-react';
 import { supabase, supabaseMain } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -117,7 +118,7 @@ interface Driver {
   id: string;
   name: string;
   rut: string;
-  phone: string;
+  phone: string | null;
   default_tractor: string | null;
   default_trailer: string | null;
 }
@@ -196,6 +197,44 @@ const formatWhatsAppUrl = (phone: string | null | undefined, driverName: string,
   return `https://wa.me/${cleanPhone}?text=${msg}`;
 };
 
+export const cleanRutKey = (rut?: string | null): string => {
+  if (!rut) return '';
+  return rut.replace(/[^0-9kK]/g, '').toUpperCase();
+};
+
+export const formatRutChile = (rutStr?: string | null): string => {
+  if (!rutStr) return '';
+  const cleaned = cleanRutKey(rutStr);
+  if (cleaned.length < 2) return rutStr.trim();
+  const dv = cleaned.slice(-1);
+  let cuerpo = cleaned.slice(0, -1);
+  cuerpo = cuerpo.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return `${cuerpo}-${dv}`;
+};
+
+export const cleanPlateKey = (plate?: string | null): string => {
+  if (!plate) return '';
+  return plate.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+};
+
+export const normalizePlate = (plate?: string | null): string => {
+  if (!plate) return '';
+  const clean = cleanPlateKey(plate);
+  if (/^[A-Z]{4}\d{2}$/.test(clean)) {
+    return `${clean.slice(0, 4)}-${clean.slice(4)}`;
+  }
+  if (/^[A-Z]{2}\d{4}$/.test(clean)) {
+    return `${clean.slice(0, 2)}-${clean.slice(2)}`;
+  }
+  return plate.trim().toUpperCase();
+};
+
+export const isSamePlate = (p1?: string | null, p2?: string | null): boolean => {
+  const c1 = cleanPlateKey(p1);
+  const c2 = cleanPlateKey(p2);
+  return Boolean(c1 && c2 && c1 === c2);
+};
+
 export default function App({ currentUser: propUser }: AppProps = {}) {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(propUser ?? null);
 
@@ -236,6 +275,9 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     }
   };
   const [selectedTruckForTimeline, setSelectedTruckForTimeline] = useState<YardOperation | null>(null);
+  const [isEditingTimelinePhone, setIsEditingTimelinePhone] = useState(false);
+  const [timelinePhoneInput, setTimelinePhoneInput] = useState('');
+  const [savingTimelinePhone, setSavingTimelinePhone] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -938,11 +980,12 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
 
     const driver = drivers.find(d => d.id === driverId);
     if (driver) {
+      setManualDriverName(driver.name);
       setDriverRut(driver.rut);
       setDriverPhone(driver.phone || '');
       
       if (driver.default_tractor) {
-        const matchingTractor = vehicles.find(v => v.plate === driver.default_tractor && v.type === 'Tractor');
+        const matchingTractor = vehicles.find(v => isSamePlate(v.plate, driver.default_tractor) && v.type === 'Tractor');
         if (matchingTractor) {
           setSelectedTractorId(matchingTractor.id);
           setIsManualTractor(false);
@@ -956,7 +999,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       }
 
       if (driver.default_trailer) {
-        const matchingTrailer = vehicles.find(v => v.plate === driver.default_trailer && v.type === 'Rampla');
+        const matchingTrailer = vehicles.find(v => isSamePlate(v.plate, driver.default_trailer) && v.type === 'Rampla');
         if (matchingTrailer) {
           setSelectedTrailerId(matchingTrailer.id);
           setIsManualTrailer(false);
@@ -970,6 +1013,48 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       }
     }
   };
+
+  const handleDriverRutChange = (val: string) => {
+    setDriverRut(val);
+    const cleanTyped = cleanRutKey(val);
+    if (cleanTyped.length >= 7) {
+      const match = drivers.find(d => cleanRutKey(d.rut) === cleanTyped);
+      if (match) {
+        if (!selectedDriverId || selectedDriverId === 'manual') {
+          if (!manualDriverName.trim()) {
+            setManualDriverName(match.name);
+          }
+          if (!driverPhone.trim() && match.phone) {
+            setDriverPhone(match.phone);
+          }
+          if (match.default_tractor && !selectedTractorId && !manualTractorPlate) {
+            const vhc = vehicles.find(v => isSamePlate(v.plate, match.default_tractor) && v.type === 'Tractor');
+            if (vhc) {
+              setSelectedTractorId(vhc.id);
+              setIsManualTractor(false);
+            } else {
+              setManualTractorPlate(match.default_tractor);
+              setIsManualTractor(true);
+            }
+          }
+          if (match.default_trailer && !selectedTrailerId && !manualTrailerPlate) {
+            const trl = vehicles.find(v => isSamePlate(v.plate, match.default_trailer) && v.type === 'Rampla');
+            if (trl) {
+              setSelectedTrailerId(trl.id);
+              setIsManualTrailer(false);
+            } else {
+              setManualTrailerPlate(match.default_trailer);
+              setIsManualTrailer(true);
+            }
+          }
+        }
+      }
+    }
+  };
+
+  const matchedDriverByRut = cleanRutKey(driverRut).length >= 7
+    ? drivers.find(d => cleanRutKey(d.rut) === cleanRutKey(driverRut))
+    : null;
 
   const handleEntryTimeChange = (val: string) => {
     setScheduledEntryTime(val);
@@ -1013,77 +1098,169 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     setIsCitaEntry(false);
     setShowAddModal(true);
   };
-   // Guardar automáticamente perfiles de Chofer y Vehículos si fueron ingresados manualmente
+   // Guardar o actualizar automáticamente perfiles de Chofer y Vehículos (creación fantasma y actualización por RUT)
   const ensureDriverAndVehiclesSaved = async (
     driverName: string,
     rut: string | null,
     phone: string | null,
     tractorPlate: string | null,
-    trailerPlate: string | null,
-    isManualDriver: boolean
+    trailerPlate: string | null
   ): Promise<string | null> => {
     let finalId: string | null = null;
 
     try {
       // 1. Guardar Tractor en vehicles si es nuevo
       if (tractorPlate && tractorPlate.trim()) {
-        const cleanTractor = tractorPlate.trim().toUpperCase();
-        const exists = vehicles.some(v => v.plate === cleanTractor && v.type === 'Tractor');
-        if (!exists) {
-          const { data: newVhc } = await supabase
-            .from('vehicles')
-            .insert([{ plate: cleanTractor, type: 'Tractor' }])
-            .select();
-          if (newVhc && newVhc[0]) {
-            setVehicles(prev => [...prev, newVhc[0]]);
+        const normTractor = normalizePlate(tractorPlate);
+        const tractorKey = cleanPlateKey(normTractor);
+        if (tractorKey) {
+          const exists = vehicles.some(v => cleanPlateKey(v.plate) === tractorKey);
+          if (!exists) {
+            const { data: newVhc, error: vErr } = await supabase
+              .from('vehicles')
+              .insert([{ plate: normTractor, type: 'Tractor' }])
+              .select();
+            if (!vErr && newVhc && newVhc[0]) {
+              setVehicles(prev => [...prev, newVhc[0]]);
+            } else if (vErr && vErr.code === '23505') {
+              const { data: dbVhc } = await supabase
+                .from('vehicles')
+                .select('*')
+                .eq('plate', normTractor)
+                .maybeSingle();
+              if (dbVhc) {
+                setVehicles(prev => [...prev, dbVhc]);
+              }
+            }
           }
         }
       }
 
       // 2. Guardar Rampla en vehicles si es nueva
       if (trailerPlate && trailerPlate.trim()) {
-        const cleanTrailer = trailerPlate.trim().toUpperCase();
-        const exists = vehicles.some(v => v.plate === cleanTrailer && v.type === 'Rampla');
-        if (!exists) {
-          const { data: newTrl } = await supabase
-            .from('vehicles')
-            .insert([{ plate: cleanTrailer, type: 'Rampla' }])
-            .select();
-          if (newTrl && newTrl[0]) {
-            setVehicles(prev => [...prev, newTrl[0]]);
+        const normTrailer = normalizePlate(trailerPlate);
+        const trailerKey = cleanPlateKey(normTrailer);
+        if (trailerKey) {
+          const exists = vehicles.some(v => cleanPlateKey(v.plate) === trailerKey);
+          if (!exists) {
+            const { data: newTrl, error: tErr } = await supabase
+              .from('vehicles')
+              .insert([{ plate: normTrailer, type: 'Rampla' }])
+              .select();
+            if (!tErr && newTrl && newTrl[0]) {
+              setVehicles(prev => [...prev, newTrl[0]]);
+            } else if (tErr && tErr.code === '23505') {
+              const { data: dbTrl } = await supabase
+                .from('vehicles')
+                .select('*')
+                .eq('plate', normTrailer)
+                .maybeSingle();
+              if (dbTrl) {
+                setVehicles(prev => [...prev, dbTrl]);
+              }
+            }
           }
         }
       }
 
-      // 3. Guardar nuevo chofer en drivers si fue ingresado manualmente
-      if (isManualDriver && driverName && driverName.trim()) {
-        const cleanName = driverName.trim();
-        const cleanRut = rut ? rut.trim() : 'S/RUT';
-        const cleanPhone = phone ? phone.trim() : '';
+      // 3. Chofer: Crear o actualizar por RUT
+      const cleanName = driverName ? driverName.trim() : '';
+      const rawRut = rut ? rut.trim() : '';
+      const rutKey = cleanRutKey(rawRut);
+      const formattedRut = rawRut ? formatRutChile(rawRut) : '';
+      const cleanPhone = phone ? phone.trim() : null;
+      const cleanTractor = tractorPlate ? normalizePlate(tractorPlate) : null;
+      const cleanTrailer = trailerPlate ? normalizePlate(trailerPlate) : null;
 
-        // Verificar si ya existe por RUT o Nombre
-        const existing = drivers.find(d => 
-          (d.rut && d.rut !== 'S/RUT' && d.rut.toLowerCase() === cleanRut.toLowerCase()) ||
-          d.name.toLowerCase() === cleanName.toLowerCase()
-        );
+      // Buscar si el chofer ya existe por RUT (clave única natural) o por nombre
+      let existingDriver = drivers.find(d => {
+        if (rutKey && cleanRutKey(d.rut) === rutKey) return true;
+        if (!rutKey && cleanName && d.name.toLowerCase() === cleanName.toLowerCase()) return true;
+        return false;
+      });
 
-        if (existing) {
-          finalId = existing.id;
-        } else {
-          const { data: newDrv, error: dErr } = await supabase
+      if (!existingDriver && formattedRut) {
+        const { data: dbDrv } = await supabase
+          .from('drivers')
+          .select('*')
+          .eq('rut', formattedRut)
+          .maybeSingle();
+        if (dbDrv) {
+          existingDriver = dbDrv;
+          setDrivers(prev => [...prev, dbDrv]);
+        }
+      }
+
+      if (existingDriver) {
+        finalId = existingDriver.id;
+        const phoneChanged = cleanPhone !== null && cleanPhone !== (existingDriver.phone || '');
+        const nameChanged = Boolean(cleanName && cleanName !== existingDriver.name);
+        const tractorChanged = Boolean(cleanTractor && cleanTractor !== existingDriver.default_tractor);
+        const trailerChanged = Boolean(cleanTrailer && cleanTrailer !== existingDriver.default_trailer);
+
+        if (phoneChanged || nameChanged || tractorChanged || trailerChanged) {
+          const updatePayload: Record<string, any> = {
+            updated_at: new Date().toISOString()
+          };
+          if (cleanPhone !== null) updatePayload.phone = cleanPhone;
+          if (nameChanged) updatePayload.name = cleanName;
+          if (tractorChanged) updatePayload.default_tractor = cleanTractor;
+          if (trailerChanged) updatePayload.default_trailer = cleanTrailer;
+
+          const { data: updatedDrv, error: uErr } = await supabase
             .from('drivers')
-            .insert([{
-              name: cleanName,
-              rut: cleanRut,
-              phone: cleanPhone || null,
-              default_tractor: tractorPlate ? tractorPlate.trim().toUpperCase() : null,
-              default_trailer: trailerPlate ? trailerPlate.trim().toUpperCase() : null
-            }])
+            .update(updatePayload)
+            .eq('id', existingDriver.id)
             .select();
 
-          if (!dErr && newDrv && newDrv[0]) {
-            finalId = newDrv[0].id;
-            setDrivers(prev => [...prev, newDrv[0]]);
+          if (!uErr && updatedDrv && updatedDrv[0]) {
+            setDrivers(prev => prev.map(d => d.id === existingDriver!.id ? updatedDrv[0] : d));
+          } else {
+            setDrivers(prev => prev.map(d => d.id === existingDriver!.id ? { ...d, ...updatePayload } : d));
+          }
+        }
+      } else if (cleanName || formattedRut) {
+        // Chofer nuevo -> Creación fantasma en dock.drivers
+        const validRut = formattedRut.length >= 5 ? formattedRut : (rutKey ? rutKey : `S/RUT-${Date.now().toString().slice(-6)}`);
+        const { data: newDrv, error: dErr } = await supabase
+          .from('drivers')
+          .insert([{
+            name: cleanName || `Chofer ${validRut}`,
+            rut: validRut,
+            phone: cleanPhone,
+            default_tractor: cleanTractor,
+            default_trailer: cleanTrailer
+          }])
+          .select();
+
+        if (!dErr && newDrv && newDrv[0]) {
+          finalId = newDrv[0].id;
+          setDrivers(prev => [...prev, newDrv[0]]);
+        } else if (dErr && dErr.code === '23505') {
+          // Conflicto de RUT: ya existe en DB, actualizar su teléfono
+          const { data: conflictedDrv } = await supabase
+            .from('drivers')
+            .select('*')
+            .eq('rut', validRut)
+            .maybeSingle();
+          if (conflictedDrv) {
+            finalId = conflictedDrv.id;
+            if (cleanPhone && cleanPhone !== conflictedDrv.phone) {
+              await supabase
+                .from('drivers')
+                .update({ phone: cleanPhone, updated_at: new Date().toISOString() })
+                .eq('id', conflictedDrv.id);
+              conflictedDrv.phone = cleanPhone;
+            }
+            setDrivers(prev => {
+              const idx = prev.findIndex(d => d.id === conflictedDrv.id);
+              if (idx >= 0) {
+                const copy = [...prev];
+                copy[idx] = conflictedDrv;
+                return copy;
+              }
+              return [...prev, conflictedDrv];
+            });
           }
         }
       }
@@ -1118,35 +1295,18 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     let finalDriverId: string | null = null;
 
     if (selectedDriverId === 'manual') {
-      if (!manualDriverName.trim()) {
-        setErrorMsg('Por favor ingrese el nombre del conductor.');
+      if (!manualDriverName.trim() && !driverRut.trim()) {
+        setErrorMsg('Por favor ingrese el nombre o RUT del conductor.');
         return;
       }
-      finalDriverName = manualDriverName.trim();
-      
-      const savedId = await ensureDriverAndVehiclesSaved(
-        finalDriverName,
-        driverRut,
-        driverPhone,
-        finalTractor,
-        finalTrailer,
-        true
-      );
-      if (savedId) finalDriverId = savedId;
+      finalDriverName = manualDriverName.trim() || `Chofer ${driverRut.trim()}`;
     } else {
       const drv = drivers.find(d => d.id === selectedDriverId);
       if (drv) {
         finalDriverName = drv.name;
         finalDriverId = drv.id;
-
-        await ensureDriverAndVehiclesSaved(
-          finalDriverName,
-          driverRut,
-          driverPhone,
-          finalTractor,
-          finalTrailer,
-          false
-        );
+      } else if (manualDriverName.trim()) {
+        finalDriverName = manualDriverName.trim();
       }
     }
 
@@ -1159,6 +1319,19 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       setErrorMsg('Debe especificar un tractor.');
       return;
     }
+
+    const savedId = await ensureDriverAndVehiclesSaved(
+      finalDriverName,
+      driverRut,
+      driverPhone,
+      finalTractor,
+      finalTrailer
+    );
+    if (savedId) {
+      finalDriverId = savedId;
+    }
+
+    const formattedDriverRut = driverRut.trim() ? formatRutChile(driverRut.trim()) : '';
 
     const carrierVal = cargoType === 'Otro' ? (customCargoType.trim() || 'Otro') : cargoType;
     const targetStatus = isCitaEntry ? 'cita' : 'espera';
@@ -1184,8 +1357,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       tractor_plate: finalTractor,
       trailer_plate: finalTrailer || null,
       driver_id: finalDriverId,
-      rut: driverRut,
-      phone: driverPhone,
+      rut: formattedDriverRut || null,
+      phone: driverPhone.trim() || null,
       driver: finalDriverName,
       carrier: carrierVal,
       type: operationType,
@@ -1207,8 +1380,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         {
           driver_id: finalDriverId,
           driver: finalDriverName,
-          rut: driverRut.trim(),
-          phone: driverPhone.trim(),
+          rut: formattedDriverRut || null,
+          phone: driverPhone.trim() || null,
           tractor_plate: finalTractor,
           trailer_plate: finalTrailer || null,
           patent: finalTractor,
@@ -1301,47 +1474,39 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
 
     let finalDriverName = '';
     let finalDriverId: string | null = null;
-    let finalRut: string | null = null;
-    let finalPhone: string | null = null;
 
     if (selectedDriverId === 'manual') {
-      if (!manualDriverName.trim()) {
-        setErrorMsg('Por favor ingrese el nombre del chofer.');
+      if (!manualDriverName.trim() && !driverRut.trim()) {
+        setErrorMsg('Por favor ingrese el nombre o RUT del chofer.');
         return;
       }
-      finalDriverName = manualDriverName.trim();
-      finalRut = driverRut.trim() || null;
-      finalPhone = driverPhone.trim() || null;
-
-      const savedId = await ensureDriverAndVehiclesSaved(
-        finalDriverName,
-        finalRut,
-        finalPhone,
-        finalTractor,
-        finalTrailer,
-        true
-      );
-      if (savedId) finalDriverId = savedId;
+      finalDriverName = manualDriverName.trim() || `Chofer ${driverRut.trim()}`;
     } else {
       const driverObj = drivers.find(d => d.id === selectedDriverId);
-      if (!driverObj) {
-        setErrorMsg('Por favor seleccione un chofer de la lista.');
+      if (driverObj) {
+        finalDriverName = driverObj.name;
+        finalDriverId = driverObj.id;
+      } else if (manualDriverName.trim()) {
+        finalDriverName = manualDriverName.trim();
+      } else {
+        setErrorMsg('Por favor seleccione un chofer de la lista o ingrese uno nuevo.');
         return;
       }
-      finalDriverName = driverObj.name;
-      finalDriverId = driverObj.id;
-      finalRut = driverObj.rut;
-      finalPhone = driverObj.phone;
-
-      await ensureDriverAndVehiclesSaved(
-        finalDriverName,
-        finalRut,
-        finalPhone,
-        finalTractor,
-        finalTrailer,
-        false
-      );
     }
+
+    const savedId = await ensureDriverAndVehiclesSaved(
+      finalDriverName,
+      driverRut,
+      driverPhone,
+      finalTractor,
+      finalTrailer
+    );
+    if (savedId) {
+      finalDriverId = savedId;
+    }
+
+    const finalRut = driverRut.trim() ? formatRutChile(driverRut.trim()) : null;
+    const finalPhone = driverPhone.trim() || null;
 
     const carrierVal = cargoType === 'Otro' ? (customCargoType.trim() || 'Otro') : cargoType;
     const nowISO = new Date().toISOString();
@@ -1393,6 +1558,58 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     } catch (err: any) {
       console.error('Error ingresando despacho Planta 2:', err);
       setErrorMsg('No se pudo registrar el despacho en Planta 2: ' + (err.message || ''));
+    }
+  };
+
+  // Guardar celular del chofer desde el modal de trazabilidad (actualiza ticket y ficha de chofer)
+  const handleSaveTimelinePhone = async () => {
+    if (!selectedTruckForTimeline) return;
+    setSavingTimelinePhone(true);
+    const newPhone = timelinePhoneInput.trim();
+
+    try {
+      // 1. Actualizar en yard_operations
+      const { error: opErr } = await supabase
+        .from('yard_operations')
+        .update({ phone: newPhone || null })
+        .eq('id', selectedTruckForTimeline.id);
+      if (opErr) throw opErr;
+
+      // 2. Actualizar en drivers por driver_id o por RUT
+      const driverId = selectedTruckForTimeline.driver_id;
+      const rutKey = cleanRutKey(selectedTruckForTimeline.rut);
+
+      if (driverId) {
+        await supabase
+          .from('drivers')
+          .update({ phone: newPhone || null, updated_at: new Date().toISOString() })
+          .eq('id', driverId);
+      } else if (rutKey) {
+        const matched = drivers.find(d => cleanRutKey(d.rut) === rutKey);
+        if (matched) {
+          await supabase
+            .from('drivers')
+            .update({ phone: newPhone || null, updated_at: new Date().toISOString() })
+            .eq('id', matched.id);
+        }
+      }
+
+      // 3. Actualizar estado local
+      setSelectedTruckForTimeline(prev => prev ? { ...prev, phone: newPhone || null } : null);
+      setTrucks(prev => prev.map(t => t.id === selectedTruckForTimeline.id ? { ...t, phone: newPhone || null } : t));
+      setDrivers(prev => prev.map(d => {
+        if ((driverId && d.id === driverId) || (rutKey && cleanRutKey(d.rut) === rutKey)) {
+          return { ...d, phone: newPhone || null };
+        }
+        return d;
+      }));
+
+      setIsEditingTimelinePhone(false);
+    } catch (err: any) {
+      console.error('Error actualizando teléfono del chofer:', err);
+      setErrorMsg('No se pudo actualizar el teléfono: ' + (err?.message || ''));
+    } finally {
+      setSavingTimelinePhone(false);
     }
   };
 
@@ -4438,13 +4655,26 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                     type="text" 
                     placeholder="12.345.678-9"
                     value={driverRut}
-                    onChange={(e) => setDriverRut(e.target.value)}
+                    onChange={(e) => handleDriverRutChange(e.target.value)}
                     className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 focus:outline-none focus:border-[#0a5c36] focus:bg-white focus:ring-1 focus:ring-[#0a5c36]"
                     required
                   />
+                  {matchedDriverByRut ? (
+                    <div className="mt-1 text-[11px] text-emerald-700 font-bold flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span className="truncate">Chofer registrado: <strong>{matchedDriverByRut.name}</strong></span>
+                    </div>
+                  ) : cleanRutKey(driverRut).length >= 7 ? (
+                    <div className="mt-1 text-[11px] text-blue-600 font-semibold flex items-center gap-1">
+                      <UserPlus className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                      <span>Nuevo chofer (creación fantasma automática)</span>
+                    </div>
+                  ) : null}
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Teléfono</label>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                    Teléfono {matchedDriverByRut && <span className="text-[10px] text-emerald-600 font-bold">(Actualizable)</span>}
+                  </label>
                   <input 
                     type="text" 
                     placeholder="56912345678"
@@ -4452,6 +4682,11 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                     onChange={(e) => setDriverPhone(e.target.value)}
                     className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full text-slate-800 focus:outline-none focus:border-[#0a5c36] focus:bg-white focus:ring-1 focus:ring-[#0a5c36]"
                   />
+                  {matchedDriverByRut && (
+                    <span className="text-[10px] text-slate-500 block mt-1">
+                      Si cambias el celular, se actualizará su ficha en el sistema.
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -4752,33 +4987,52 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 </select>
 
                 {selectedDriverId === 'manual' && (
-                  <div className="space-y-3 mt-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                  <div className="mt-3">
                     <input 
                       type="text" 
                       placeholder="Nombre Completo Chofer *"
                       value={manualDriverName}
                       onChange={(e) => setManualDriverName(e.target.value)}
                       className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm w-full font-bold focus:outline-none focus:border-[#0a5c36]"
-                      required
+                      required={selectedDriverId === 'manual'}
                     />
-                    <div className="grid grid-cols-2 gap-2">
-                      <input 
-                        type="text" 
-                        placeholder="RUT Chofer"
-                        value={driverRut}
-                        onChange={(e) => setDriverRut(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-[#0a5c36]"
-                      />
-                      <input 
-                        type="text" 
-                        placeholder="Teléfono Chofer"
-                        value={driverPhone}
-                        onChange={(e) => setDriverPhone(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-[#0a5c36]"
-                      />
-                    </div>
                   </div>
                 )}
+
+                {/* RUT y Teléfono siempre visibles y editables */}
+                <div className="grid grid-cols-2 gap-2 mt-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">RUT Chofer</label>
+                    <input 
+                      type="text" 
+                      placeholder="12.345.678-9"
+                      value={driverRut}
+                      onChange={(e) => handleDriverRutChange(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-[#0a5c36] w-full"
+                    />
+                    {matchedDriverByRut ? (
+                      <span className="text-[10px] text-emerald-700 font-bold block mt-0.5 truncate">
+                        ✓ {matchedDriverByRut.name}
+                      </span>
+                    ) : cleanRutKey(driverRut).length >= 7 ? (
+                      <span className="text-[10px] text-blue-600 font-semibold block mt-0.5">
+                        + Nuevo chofer
+                      </span>
+                    ) : null}
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                      Teléfono {matchedDriverByRut && <span className="text-[9px] text-emerald-600 font-bold">(Actualizable)</span>}
+                    </label>
+                    <input 
+                      type="text" 
+                      placeholder="56912345678"
+                      value={driverPhone}
+                      onChange={(e) => setDriverPhone(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-[#0a5c36] w-full"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Tractor */}
@@ -4949,7 +5203,10 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               </div>
 
               <button
-                onClick={() => setSelectedTruckForTimeline(null)}
+                onClick={() => {
+                  setSelectedTruckForTimeline(null);
+                  setIsEditingTimelinePhone(false);
+                }}
                 className="text-slate-400 hover:text-slate-600 p-2 rounded-xl hover:bg-slate-100 transition-colors font-bold text-sm"
               >
                 ✕
@@ -4959,20 +5216,76 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             {/* Ficha Resumen Camión */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs">
               <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Chofer</span>
-                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                  <span className="font-extrabold text-slate-800">{selectedTruckForTimeline.driver}</span>
-                  {selectedTruckForTimeline.phone && (
-                    <a
-                      href={formatWhatsAppUrl(selectedTruckForTimeline.phone, selectedTruckForTimeline.driver, selectedTruckForTimeline.tractor_plate) || '#'}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 bg-[#25D366] hover:bg-[#128C7E] text-white px-2 py-0.5 rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs"
-                      title={`Hablar por WhatsApp con ${selectedTruckForTimeline.driver} (${selectedTruckForTimeline.phone})`}
-                    >
-                      <MessageSquare className="w-3 h-3 fill-current" />
-                      <span>WhatsApp</span>
-                    </a>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Chofer / Identificación</span>
+                <div className="mt-0.5">
+                  <span className="font-extrabold text-slate-800 block">{selectedTruckForTimeline.driver}</span>
+                  {selectedTruckForTimeline.rut && (
+                    <span className="text-[10px] font-mono text-slate-500 font-semibold block">
+                      RUT: {selectedTruckForTimeline.rut}
+                    </span>
+                  )}
+                  
+                  {!isEditingTimelinePhone ? (
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                      <span className="text-[11px] font-mono font-bold text-slate-700">
+                        {selectedTruckForTimeline.phone || 'Sin celular'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTimelinePhoneInput(selectedTruckForTimeline.phone || '');
+                          setIsEditingTimelinePhone(true);
+                        }}
+                        className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-slate-200 rounded transition-colors cursor-pointer"
+                        title="Actualizar celular del chofer"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                      </button>
+                      {selectedTruckForTimeline.phone && (
+                        <a
+                          href={formatWhatsAppUrl(selectedTruckForTimeline.phone, selectedTruckForTimeline.driver, selectedTruckForTimeline.tractor_plate) || '#'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 bg-[#25D366] hover:bg-[#128C7E] text-white px-2 py-0.5 rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs"
+                          title={`Hablar por WhatsApp con ${selectedTruckForTimeline.driver} (${selectedTruckForTimeline.phone})`}
+                        >
+                          <MessageSquare className="w-3 h-3 fill-current" />
+                          <span>WhatsApp</span>
+                        </a>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={timelinePhoneInput}
+                          onChange={(e) => setTimelinePhoneInput(e.target.value)}
+                          placeholder="56912345678"
+                          className="bg-white border border-emerald-500 rounded-lg px-2 py-0.5 text-xs font-mono text-slate-800 w-28 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          disabled={savingTimelinePhone}
+                          onClick={handleSaveTimelinePhone}
+                          className="bg-[#0a5c36] hover:bg-[#08482a] text-white text-[10px] font-bold px-2 py-1 rounded-lg disabled:opacity-50 cursor-pointer shadow-xs"
+                        >
+                          {savingTimelinePhone ? '...' : 'OK'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingTimelinePhone}
+                          onClick={() => setIsEditingTimelinePhone(false)}
+                          className="bg-slate-200 hover:bg-slate-300 text-slate-600 text-[10px] font-bold px-1.5 py-1 rounded-lg cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <span className="text-[9px] text-emerald-700 font-semibold block leading-tight">
+                        Se actualizará en ticket y chofer
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>
@@ -5173,7 +5486,10 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
 
             <div className="pt-2 flex justify-end">
               <button
-                onClick={() => setSelectedTruckForTimeline(null)}
+                onClick={() => {
+                  setSelectedTruckForTimeline(null);
+                  setIsEditingTimelinePhone(false);
+                }}
                 className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-md"
               >
                 Cerrar Trazabilidad
