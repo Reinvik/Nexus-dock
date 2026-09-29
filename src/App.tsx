@@ -42,9 +42,12 @@ import {
   Crown,
   Eye,
   EyeOff,
-  Edit2
+  Edit2,
+  Menu,
+  X,
+  Radio
 } from 'lucide-react';
-import { supabase, supabaseMain } from './lib/supabase';
+import { supabase, supabaseMain, activeSchema } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
@@ -235,6 +238,15 @@ export const isSamePlate = (p1?: string | null, p2?: string | null): boolean => 
   return Boolean(c1 && c2 && c1 === c2);
 };
 
+export const normalizeSearchText = (str?: string | null): string => {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+};
+
 export default function App({ currentUser: propUser }: AppProps = {}) {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(propUser ?? null);
 
@@ -259,6 +271,10 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     }
   }, [activeTab, isNexusOwner]);
 
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isRealtimeActive, setIsRealtimeActive] = useState(false);
+  const [mobileYardColumn, setMobileYardColumn] = useState<'all' | 'cita' | 'espera' | 'anden' | 'completado'>('all');
+  const [mobilePlanta2Column, setMobilePlanta2Column] = useState<'all' | 'planta_carga' | 'en_ruta' | 'patio_cd' | 'completado'>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showPlanta2AddModal, setShowPlanta2AddModal] = useState(false);
   const [isPlanta2HeaderCollapsed, setIsPlanta2HeaderCollapsed] = useState<boolean>(() => {
@@ -475,9 +491,86 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     return () => clearInterval(timer);
   }, []);
 
-  // Cargar datos
+  // Cargar datos y suscripción Realtime en vivo
   useEffect(() => {
     fetchData();
+
+    // Suscripción Realtime WebSocket para cambios en vivo en yard_operations, docks, etc.
+    const channel = supabase
+      .channel('dock-realtime-inbound')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: activeSchema,
+          table: 'yard_operations'
+        },
+        (payload: any) => {
+          console.log('[Realtime] yard_operations cambiado:', payload.eventType);
+          if (payload.eventType === 'INSERT' && payload.new) {
+            setTrucks(prev => {
+              if (prev.some(t => t.id === payload.new.id)) return prev;
+              return [payload.new, ...prev];
+            });
+          } else if (payload.eventType === 'UPDATE' && payload.new) {
+            setTrucks(prev => prev.map(t => t.id === payload.new.id ? { ...t, ...payload.new } : t));
+          } else if (payload.eventType === 'DELETE' && payload.old) {
+            setTrucks(prev => prev.filter(t => t.id !== payload.old.id));
+          }
+          fetchData(false);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: activeSchema,
+          table: 'docks'
+        },
+        (payload: any) => {
+          console.log('[Realtime] docks cambiado:', payload.eventType);
+          if (payload.eventType === 'UPDATE' && payload.new) {
+            setDocks(prev => prev.map(d => d.id === payload.new.id ? { ...d, ...payload.new } : d));
+          }
+          fetchData(false);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: activeSchema,
+          table: 'drivers'
+        },
+        () => {
+          fetchData(false);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: activeSchema,
+          table: 'vehicles'
+        },
+        () => {
+          fetchData(false);
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Realtime Inbound] Estado de canal:', status);
+        setIsRealtimeActive(status === 'SUBSCRIBED');
+      });
+
+    // Heartbeat / Sondeo periódico cada 20s como red de seguridad
+    const heartbeat = setInterval(() => {
+      fetchData(false);
+    }, 20000);
+
+    return () => {
+      clearInterval(heartbeat);
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // Cargar usuarios cuando se selecciona la pestaña de usuarios
@@ -674,8 +767,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     }
   };
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (showLoadingSpinner: boolean = true) => {
+    if (showLoadingSpinner) setLoading(true);
     setErrorMsg(null);
     try {
       const { data: docksData, error: docksError } = await supabase
@@ -743,7 +836,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       console.error('Error cargando datos de Supabase:', err);
       setErrorMsg(err.message || 'Error al conectar con la base de datos.');
     } finally {
-      setLoading(false);
+      if (showLoadingSpinner) setLoading(false);
     }
   };
 
@@ -1451,11 +1544,11 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         .eq('id', truckId);
 
       if (error) throw error;
-      fetchData();
+      fetchData(false);
     } catch (err: any) {
       console.error('Error al despachar desde Planta 2:', err);
       setErrorMsg('Error al despachar el camión desde Planta 2.');
-      fetchData();
+      fetchData(false);
     }
   };
 
@@ -1617,6 +1710,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const handleMoveToYard = async (truckId: string) => {
     setErrorMsg(null);
     const nowISO = new Date().toISOString();
+    const truck = trucks.find(t => t.id === truckId);
 
     // UI Optimista
     setTrucks(prev => prev.map(t => {
@@ -1624,27 +1718,37 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         return { 
           ...t, 
           status: 'espera' as const,
-          entry_time: nowISO 
+          entry_time: nowISO,
+          yard_arrival_time: nowISO,
+          dispatch_time: t.dispatch_time || (t.origin === 'planta_2' ? nowISO : null)
         };
       }
       return t;
     }));
 
     try {
+      const updatePayload: Record<string, any> = {
+        status: 'espera',
+        entry_time: nowISO
+      };
+      if (truck?.origin === 'planta_2') {
+        updatePayload.yard_arrival_time = nowISO;
+        if (!truck.dispatch_time) {
+          updatePayload.dispatch_time = nowISO;
+        }
+      }
+
       const { error } = await supabase
         .from('yard_operations')
-        .update({
-          status: 'espera',
-          entry_time: nowISO
-        })
+        .update(updatePayload)
         .eq('id', truckId);
 
       if (error) throw error;
-      fetchData();
+      fetchData(false);
     } catch (err: any) {
       console.error('Error al registrar entrada a patio:', err);
       setErrorMsg('Error al registrar el ingreso físico del camión al patio.');
-      fetchData();
+      fetchData(false);
     }
   };
 
@@ -1949,12 +2053,22 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     }
   };
 
-  const filteredTrucks = trucks.filter(truck => 
-    truck.driver.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (truck.tractor_plate && truck.tractor_plate.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (truck.trailer_plate && truck.trailer_plate.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (truck.carrier && truck.carrier.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  const filteredTrucks = trucks.filter(truck => {
+    if (!searchQuery.trim()) return true;
+    const q = normalizeSearchText(searchQuery);
+    const qRut = cleanRutKey(searchQuery);
+    const qPlate = cleanPlateKey(searchQuery);
+
+    const driverMatch = normalizeSearchText(truck.driver).includes(q);
+    const carrierMatch = normalizeSearchText(truck.carrier).includes(q);
+    const tractorMatch = normalizeSearchText(truck.tractor_plate).includes(q) || (Boolean(qPlate) && cleanPlateKey(truck.tractor_plate).includes(qPlate));
+    const trailerMatch = normalizeSearchText(truck.trailer_plate).includes(q) || (Boolean(qPlate) && cleanPlateKey(truck.trailer_plate).includes(qPlate));
+    const rutMatch = normalizeSearchText(truck.rut).includes(q) || (Boolean(qRut) && cleanRutKey(truck.rut).includes(qRut));
+    const phoneMatch = normalizeSearchText(truck.phone).includes(q) || (Boolean(truck.phone) && (truck.phone || '').includes(searchQuery.trim()));
+    const patentMatch = normalizeSearchText(truck.patent).includes(q);
+
+    return driverMatch || carrierMatch || tractorMatch || trailerMatch || rutMatch || phoneMatch || patentMatch;
+  });
 
   const getGroupedCompletedTrucks = () => {
     const completed = filteredTrucks.filter(t => t.status === 'completado')
@@ -2161,26 +2275,52 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   return (
     <div className="min-h-screen bg-[#f1f5f9] text-slate-800 flex font-sans">
       
-      {/* Barra Lateral Izquierda (Sidebar Verde CiAL) */}
-      <aside className="w-64 bg-[#0a5c36] text-white flex flex-col shrink-0 shadow-lg select-none">
+      {/* Overlay Backdrop Móvil */}
+      {isMobileMenuOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 md:hidden"
+          onClick={() => setIsMobileMenuOpen(false)}
+        />
+      )}
+
+      {/* Barra Lateral Izquierda (Sidebar Verde CiAL - Responsive Drawer) */}
+      <aside className={`
+        fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-[#0a5c36] text-white flex flex-col shadow-2xl select-none
+        transition-transform duration-300 ease-in-out shrink-0
+        md:static md:w-64 md:translate-x-0 md:shadow-lg md:z-auto
+        ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
+      `}>
         
         {/* Logotipo / Cabecera Sidebar con la imagen oficial de CiAL Alimentos */}
-        <div className="p-5 border-b border-white/10 flex items-center gap-3 bg-[#08482a]">
-          <img 
-            src={cialLogo} 
-            alt="CiAL Alimentos" 
-            className="w-16 h-16 object-contain drop-shadow-sm" 
-          />
-          <div>
-            <h2 className="text-sm font-extrabold tracking-wider leading-none">Control</h2>
-            <span className="text-xs text-emerald-300 font-semibold tracking-wide uppercase">Inbound</span>
+        <div className="p-4 sm:p-5 border-b border-white/10 flex items-center justify-between bg-[#08482a]">
+          <div className="flex items-center gap-3">
+            <img 
+              src={cialLogo} 
+              alt="CiAL Alimentos" 
+              className="w-12 h-12 sm:w-14 sm:h-14 object-contain drop-shadow-sm" 
+            />
+            <div>
+              <h2 className="text-sm font-extrabold tracking-wider leading-none">Control</h2>
+              <span className="text-xs text-emerald-300 font-semibold tracking-wide uppercase">Inbound</span>
+            </div>
           </div>
+          <button 
+            type="button"
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="md:hidden p-1.5 text-white/80 hover:text-white rounded-xl hover:bg-white/10 transition-colors"
+            title="Cerrar menú"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Links Navegación */}
-        <nav className="flex-1 px-4 py-6 space-y-2">
+        <nav className="flex-1 px-4 py-4 sm:py-6 space-y-1.5 sm:space-y-2 overflow-y-auto">
           <button 
-            onClick={() => setActiveTab('yard')}
+            onClick={() => {
+              setActiveTab('yard');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl text-sm font-bold transition-all duration-150 cursor-pointer ${activeTab === 'yard' ? 'bg-white/15 text-white shadow-sm' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
           >
             <Monitor className="w-5 h-5 shrink-0" />
@@ -2188,7 +2328,10 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
           </button>
 
           <button 
-            onClick={() => setActiveTab('planta2')}
+            onClick={() => {
+              setActiveTab('planta2');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center justify-between w-full px-4 py-3 rounded-xl text-sm font-bold transition-all duration-150 cursor-pointer ${activeTab === 'planta2' ? 'bg-white/15 text-white shadow-sm ring-1 ring-cyan-400/40' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
           >
             <div className="flex items-center gap-3">
@@ -2203,24 +2346,33 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
           </button>
           
           <button 
-            onClick={() => setActiveTab('scheduler')}
+            onClick={() => {
+              setActiveTab('scheduler');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl text-sm font-bold transition-all duration-150 cursor-pointer ${activeTab === 'scheduler' ? 'bg-white/15 text-white shadow-sm' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
           >
             <Calendar className="w-5 h-5 shrink-0" />
             Agendamiento Andenes
           </button>
 
-          <div className="pt-4 border-t border-white/10 mt-4">
+          <div className="pt-3 border-t border-white/10 mt-3">
             <span className="px-4 text-[10px] font-bold text-emerald-300/80 uppercase tracking-widest block mb-2">Logs & Historial</span>
             <button
-              onClick={() => setActiveTab('history')}
+              onClick={() => {
+                setActiveTab('history');
+                setIsMobileMenuOpen(false);
+              }}
               className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'history' ? 'bg-white/15 text-white shadow-sm' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
             >
               <History className="w-4 h-4 shrink-0" />
               Historial Operaciones
             </button>
             <button
-              onClick={() => setActiveTab('reports')}
+              onClick={() => {
+                setActiveTab('reports');
+                setIsMobileMenuOpen(false);
+              }}
               className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'reports' ? 'bg-white/15 text-white shadow-sm' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
             >
               <BarChart3 className="w-4 h-4 shrink-0" />
@@ -2229,13 +2381,16 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
           </div>
 
           {isNexusOwner && (
-            <div className="pt-4 border-t border-white/10 mt-4">
+            <div className="pt-3 border-t border-white/10 mt-3">
               <span className="px-4 text-[10px] font-bold text-amber-300/90 uppercase tracking-widest block mb-2 flex items-center gap-1.5">
                 <Crown className="w-3 h-3 text-amber-400" />
                 Nexus Owner
               </span>
               <button
-                onClick={() => setActiveTab('users')}
+                onClick={() => {
+                  setActiveTab('users');
+                  setIsMobileMenuOpen(false);
+                }}
                 className={`flex items-center justify-between w-full px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'users' ? 'bg-amber-400/20 text-amber-200 shadow-sm ring-1 ring-amber-400/40' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
               >
                 <div className="flex items-center gap-3">
@@ -2294,53 +2449,79 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       {/* Main Area Derecha */}
       <div className="flex-1 flex flex-col overflow-x-hidden min-h-screen">
         
-        {/* Cabecera Unificada (Optimización de Eje Y) */}
-        <header className="bg-white border-b border-slate-200 px-6 py-2 flex flex-row items-center justify-between gap-4 shadow-sm select-none shrink-0 min-h-[56px]">
+        {/* Cabecera Unificada Responsiva */}
+        <header className="bg-white border-b border-slate-200 px-3 sm:px-6 py-2.5 flex flex-wrap md:flex-nowrap items-center justify-between gap-2 sm:gap-4 shadow-sm select-none shrink-0 min-h-[56px]">
           
-          {/* Logo/Título de la página y Reloj (Izquierda) */}
-          <div className="flex flex-col justify-center">
-            <div className="flex items-center gap-2">
-              <h1 className="text-sm font-extrabold text-slate-800 tracking-tight leading-none">
-                {activeTab === 'yard' && 'Monitoreo Activo de Patio'}
-                {activeTab === 'planta2' && 'Gestión Despacho Planta 2'}
-                {activeTab === 'scheduler' && 'Matriz de Agendamiento de Andenes'}
-                {activeTab === 'history' && 'Historial de Operaciones'}
-                {activeTab === 'reports' && 'Reportes & Métricas de Eficiencia'}
-                {activeTab === 'users' && 'Gestión de Usuarios Activos & Contraseñas'}
-              </h1>
-              <span className={`text-[8px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded-full leading-none border ${
-                activeTab === 'planta2' ? 'bg-cyan-50 border-cyan-200 text-cyan-800' : 
-                activeTab === 'users' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-100 text-emerald-700'
-              }`}>
-                {activeTab === 'planta2' ? 'Planta 2' : activeTab === 'users' ? 'Nexus Owner' : 'Vista Monitor'}
-              </span>
-            </div>
-            <div className="text-[10px] text-slate-500 font-semibold flex items-center gap-1 mt-1 leading-none">
-              <Clock className="w-3 h-3 text-emerald-600 shrink-0" />
-              <span>{formatHeaderDate(currentTime)}</span>
+          {/* Botón Hamburguesa Móvil + Título & Reloj */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button 
+              type="button"
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="md:hidden p-2 text-slate-700 hover:text-[#0a5c36] hover:bg-slate-100 rounded-xl transition-colors cursor-pointer shrink-0"
+              title="Abrir menú de navegación"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            <div className="flex flex-col justify-center min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-xs sm:text-sm font-extrabold text-slate-800 tracking-tight leading-tight truncate">
+                  {activeTab === 'yard' && 'Monitoreo Activo de Patio'}
+                  {activeTab === 'planta2' && 'Gestión Despacho Planta 2'}
+                  {activeTab === 'scheduler' && 'Matriz de Agendamiento'}
+                  {activeTab === 'history' && 'Historial Operaciones'}
+                  {activeTab === 'reports' && 'Reportes & Métricas'}
+                  {activeTab === 'users' && 'Gestión de Usuarios'}
+                </h1>
+                
+                {/* Badge Realtime en Vivo */}
+                <span className={`inline-flex items-center gap-1.5 text-[9px] sm:text-[10px] font-black px-2 py-0.5 rounded-full border shadow-2xs ${
+                  isRealtimeActive 
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300' 
+                    : 'bg-amber-50 text-amber-800 border-amber-300'
+                }`}>
+                  <Radio className={`w-2.5 h-2.5 ${isRealtimeActive ? 'text-emerald-600 animate-pulse' : 'text-amber-600'}`} />
+                  <span>{isRealtimeActive ? 'En Vivo' : 'Conectando'}</span>
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-500 font-semibold hidden sm:flex items-center gap-1 mt-0.5 leading-none">
+                <Clock className="w-3 h-3 text-emerald-600 shrink-0" />
+                <span>{formatHeaderDate(currentTime)}</span>
+              </div>
             </div>
           </div>
 
-          {/* Grupo de Control Unificado (Derecha) */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Grupo de Control Unificado (Derecha / Buscador + Acciones) */}
+          <div className="flex items-center gap-1.5 sm:gap-2 w-full md:w-auto justify-end">
             
-            {/* Buscador Integrado */}
-            <div className="relative w-64 md:w-80">
-              <Search className="absolute left-3 top-2 w-3.5 h-3.5 text-slate-400" />
+            {/* Buscador Integrado con botón limpiar */}
+            <div className="relative flex-1 md:w-72 lg:w-80 min-w-0">
+              <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400" />
               <input 
                 type="text" 
-                placeholder="Buscar chofer, tractor, rampla, transportista..."
+                placeholder="Buscar chofer, tractor, patente, rut..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 pl-9 pr-3 text-xs w-full text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#0a5c36] focus:bg-white focus:ring-1 focus:ring-[#0a5c36] transition-all"
+                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 pl-8 sm:pl-9 pr-7 text-xs w-full text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#0a5c36] focus:bg-white focus:ring-1 focus:ring-[#0a5c36] transition-all"
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 p-0.5"
+                  title="Limpiar búsqueda"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
             {/* Botón de Refrescar */}
             <button 
-              onClick={fetchData}
-              title="Refrescar datos"
-              className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-all cursor-pointer active:scale-95 shadow-sm flex items-center justify-center"
+              type="button"
+              onClick={() => fetchData()}
+              title="Refrescar datos en vivo"
+              className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-all cursor-pointer active:scale-95 shadow-sm flex items-center justify-center shrink-0"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -2348,30 +2529,34 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             {/* Botón de Registrar Ingreso (según tab) */}
             {activeTab === 'planta2' ? (
               <button 
+                type="button"
                 onClick={() => {
                   const now = new Date();
                   setScheduledEntryTime(formatLocalDatetime(now));
                   setShowPlanta2AddModal(true);
                 }}
-                className="flex items-center gap-1.5 bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-800 hover:to-blue-800 text-white px-3.5 py-2 rounded-xl text-xs font-extrabold shadow-sm transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                className="flex items-center gap-1.5 bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-800 hover:to-blue-800 text-white px-3 sm:px-3.5 py-2 rounded-xl text-xs font-extrabold shadow-sm transition-all active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
-                Ingresar Despacho Planta 2
+                <span className="hidden sm:inline">Ingresar Despacho Planta 2</span>
+                <span className="sm:hidden">+ Despacho</span>
               </button>
             ) : (
               <button 
+                type="button"
                 onClick={handleOpenAddModal}
-                className="flex items-center gap-1 bg-[#0a5c36] hover:bg-[#08482a] text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-sm transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                className="flex items-center gap-1 bg-[#0a5c36] hover:bg-[#08482a] text-white px-3 sm:px-3.5 py-2 rounded-xl text-xs font-bold shadow-sm transition-all active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
-                Ingresar Camión / Cita
+                <span className="hidden sm:inline">Ingresar Camión / Cita</span>
+                <span className="sm:hidden">+ Ingresar</span>
               </button>
             )}
           </div>
         </header>
 
         {/* Contenido Principal */}
-        <main className="flex-1 p-6 space-y-6">
+        <main className="flex-1 p-3 sm:p-6 space-y-4 sm:space-y-6">
           
           {/* Banner de error */}
           {errorMsg && (
@@ -2383,6 +2568,58 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             </div>
           )}
 
+          {/* Banner de búsqueda activa con acceso directo a camiones en ruta */}
+          {searchQuery.trim() && (
+            <div className="bg-white border-2 border-emerald-500/40 rounded-2xl p-3.5 sm:p-4 shadow-sm space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Search className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span className="text-xs text-slate-800 font-bold">
+                    Búsqueda: <span className="text-emerald-800 font-black font-mono">"{searchQuery}"</span> ({filteredTrucks.length} transporte{filteredTrucks.length !== 1 ? 's' : ''} encontrado{filteredTrucks.length !== 1 ? 's' : ''})
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="text-xs font-bold text-slate-500 hover:text-slate-800 cursor-pointer flex items-center gap-1 self-end sm:self-auto"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Limpiar filtro</span>
+                </button>
+              </div>
+
+              {/* Si entre los resultados hay camiones en ruta o en carga, mostrar acción directa de llegada */}
+              {filteredTrucks.some(t => t.status === 'en_ruta' || (t.origin === 'planta_2' && t.status === 'planta_carga')) && (
+                <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-black uppercase text-cyan-800 tracking-wider flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5 text-cyan-600 animate-pulse" />
+                      Transporte en Ruta Encontrado:
+                    </span>
+                    {filteredTrucks.filter(t => t.status === 'en_ruta' || (t.origin === 'planta_2' && t.status === 'planta_carga')).map(t => (
+                      <p key={t.id} className="text-xs font-bold text-slate-800">
+                        {t.driver} • TR: {t.tractor_plate || t.patent} {t.trailer_plate ? `• R: ${t.trailer_plate}` : ''} ({t.carrier})
+                      </p>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {filteredTrucks.filter(t => t.status === 'en_ruta' || (t.origin === 'planta_2' && t.status === 'planta_carga')).map(t => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => handleMoveToYard(t.id)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-xl text-xs font-extrabold shadow-sm transition-all active:scale-95 cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        <span>📥 Registrar Llegada a Patio</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Kanban / Contenedor principal */}
           {loading && trucks.length === 0 ? (
             <div className="text-center py-20 bg-white border border-slate-200 rounded-2xl shadow-sm">
@@ -2391,148 +2628,225 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             </div>
           ) : activeTab === 'yard' ? (
             
-            /* Pestaña: Kanban Board para Monitor de 4 columnas */
-            <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              
-              {/* 1. Columna: Citas & En Ruta (Planta 2) */}
-              <div 
-                onDragOver={handleDragOver}
-                onDrop={(e) => handleDrop(e, 'cita')}
-                className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]"
-              >
-                <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
-                  <div className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full bg-yellow-500"></span>
-                    <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Citas & En Ruta</h3>
-                  </div>
-                  <span className="bg-yellow-100 text-yellow-800 text-xs px-3 py-1 rounded-full font-bold shadow-sm">
-                    {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta').length}
-                  </span>
-                </div>
-                
-                <div className="space-y-4 flex-1 overflow-y-auto">
-                  {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta')
-                    .sort((a, b) => new Date(a.entry_time).getTime() - new Date(b.entry_time).getTime())
-                    .map(truck => (
-                    <div 
-                      key={truck.id} 
-                      draggable={true}
-                      onDragStart={(e) => handleDragStart(e, truck.id, truck.status)}
-                      className={`p-5 rounded-2xl space-y-3 shadow-sm transition-all cursor-grab active:cursor-grabbing hover:shadow-md border ${
-                        truck.status === 'en_ruta' 
-                          ? 'bg-gradient-to-b from-cyan-50/70 to-white border-2 border-cyan-400' 
-                          : 'bg-white border-slate-200 hover:border-slate-300'
-                      }`}
-                    >
-                      {truck.status === 'en_ruta' && (
-                        <div className="bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-extrabold text-[10px] tracking-wider uppercase px-3 py-1 rounded-t-xl -mx-5 -mt-5 mb-2 flex items-center justify-between shadow-sm">
-                          <span className="flex items-center gap-1.5">
-                            <Truck className="w-3.5 h-3.5 animate-pulse text-cyan-200" />
-                            EN RUTA DESDE PLANTA 2
-                          </span>
-                          <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded font-black">Sin Cita</span>
-                        </div>
-                      )}
+            <div className="space-y-4">
+              {/* Selector de Columnas Móvil (md:hidden) */}
+              <div className="md:hidden flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none select-none">
+                <button
+                  type="button"
+                  onClick={() => setMobileYardColumn('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobileYardColumn === 'all' ? 'bg-[#0a5c36] text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Todas ({filteredTrucks.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileYardColumn('cita')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobileYardColumn === 'cita' ? 'bg-yellow-500 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Citas & Ruta ({filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta' || (searchQuery.trim().length > 0 && t.origin === 'planta_2' && t.status === 'planta_carga')).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileYardColumn('espera')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobileYardColumn === 'espera' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Espera ({filteredTrucks.filter(t => t.status === 'espera').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileYardColumn('anden')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobileYardColumn === 'anden' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  En Andén ({filteredTrucks.filter(t => t.status === 'anden').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileYardColumn('completado')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobileYardColumn === 'completado' ? 'bg-slate-700 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Recibidos ({filteredTrucks.filter(t => t.status === 'completado').length})
+                </button>
+              </div>
 
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex flex-wrap gap-1.5">
-                          <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-extrabold tracking-wider">
-                            TR: {truck.tractor_plate || 'S/T'}
-                          </span>
-                          <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 font-bold tracking-wider">
-                            R: {truck.trailer_plate || 'S/R'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteTruck(truck.id);
-                            }}
-                            title="Eliminar registro"
-                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                          <span className={`text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${truck.type === 'Carga' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-orange-50 text-orange-700 border border-orange-100'}`}>
-                            {truck.type}
-                          </span>
-                        </div>
-                      </div>
-                      
-                      <div className="text-xs space-y-1.5 text-slate-600 font-medium pt-1 border-t border-slate-50">
-                        <div className="flex items-center justify-between gap-1">
-                          <p className="flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap"><User className="w-4 h-4 text-slate-400 shrink-0" /> <span className="font-bold text-slate-700">{truck.driver}</span></p>
-                          {truck.phone && (
-                            <a
-                              href={formatWhatsAppUrl(truck.phone, truck.driver, truck.tractor_plate) || '#'}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="inline-flex items-center gap-1 bg-[#25D366] hover:bg-[#128C7E] text-white px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shadow-xs shrink-0"
-                              title={`Hablar por WhatsApp con ${truck.driver} (${truck.phone})`}
+              {/* Pestaña: Kanban Board para Monitor de 4 columnas */}
+              <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                
+                {/* 1. Columna: Citas & En Ruta (Planta 2) */}
+                <div 
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, 'cita')}
+                  className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 flex-col min-h-[500px] ${
+                    mobileYardColumn !== 'all' && mobileYardColumn !== 'cita' ? 'hidden md:flex' : 'flex'
+                  }`}
+                >
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-yellow-500"></span>
+                      <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Citas & En Ruta</h3>
+                    </div>
+                    <span className="bg-yellow-100 text-yellow-800 text-xs px-3 py-1 rounded-full font-bold shadow-sm">
+                      {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta' || (searchQuery.trim().length > 0 && t.origin === 'planta_2' && t.status === 'planta_carga')).length}
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-4 flex-1 overflow-y-auto">
+                    {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta' || (searchQuery.trim().length > 0 && t.origin === 'planta_2' && t.status === 'planta_carga'))
+                      .sort((a, b) => {
+                        const aIsPriority = a.status === 'en_ruta' || a.status === 'planta_carga';
+                        const bIsPriority = b.status === 'en_ruta' || b.status === 'planta_carga';
+                        if (aIsPriority && !bIsPriority) return -1;
+                        if (!aIsPriority && bIsPriority) return 1;
+                        if (a.status === 'en_ruta' && b.status === 'en_ruta') {
+                          const timeA = a.dispatch_time ? new Date(a.dispatch_time).getTime() : 0;
+                          const timeB = b.dispatch_time ? new Date(b.dispatch_time).getTime() : 0;
+                          return timeB - timeA;
+                        }
+                        return new Date(a.entry_time).getTime() - new Date(b.entry_time).getTime();
+                      })
+                      .map(truck => (
+                      <div 
+                        key={truck.id} 
+                        draggable={true}
+                        onDragStart={(e) => handleDragStart(e, truck.id, truck.status)}
+                        className={`p-5 rounded-2xl space-y-3 shadow-sm transition-all cursor-grab active:cursor-grabbing hover:shadow-md border ${
+                          truck.status === 'en_ruta' 
+                            ? 'bg-gradient-to-b from-cyan-50/70 to-white border-2 border-cyan-400' 
+                            : truck.status === 'planta_carga'
+                            ? 'bg-gradient-to-b from-amber-50/70 to-white border-2 border-amber-400'
+                            : 'bg-white border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        {truck.status === 'en_ruta' && (
+                          <div className="bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-extrabold text-[10px] tracking-wider uppercase px-3 py-1 rounded-t-xl -mx-5 -mt-5 mb-2 flex items-center justify-between shadow-sm">
+                            <span className="flex items-center gap-1.5">
+                              <Truck className="w-3.5 h-3.5 animate-pulse text-cyan-200" />
+                              EN RUTA DESDE PLANTA 2
+                            </span>
+                            <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded font-black">En Carretera</span>
+                          </div>
+                        )}
+
+                        {truck.status === 'planta_carga' && (
+                          <div className="bg-gradient-to-r from-amber-600 to-orange-500 text-white font-extrabold text-[10px] tracking-wider uppercase px-3 py-1 rounded-t-xl -mx-5 -mt-5 mb-2 flex items-center justify-between shadow-sm">
+                            <span className="flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 text-amber-200" />
+                              EN CARGA EN PLANTA 2 (ENCONTRADO EN BÚSQUEDA)
+                            </span>
+                            <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded font-black">Planta 2</span>
+                          </div>
+                        )}
+
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex flex-wrap gap-1.5">
+                            <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-extrabold tracking-wider">
+                              TR: {truck.tractor_plate || 'S/T'}
+                            </span>
+                            <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 font-bold tracking-wider">
+                              R: {truck.trailer_plate || 'S/R'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteTruck(truck.id);
+                              }}
+                              title="Eliminar registro"
+                              className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
                             >
-                              <MessageSquare className="w-3 h-3 fill-current" />
-                              <span>WSP</span>
-                            </a>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                            <span className={`text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${truck.type === 'Carga' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-orange-50 text-orange-700 border border-orange-100'}`}>
+                              {truck.type}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <div className="text-xs space-y-1.5 text-slate-600 font-medium pt-1 border-t border-slate-50">
+                          <div className="flex items-center justify-between gap-1">
+                            <p className="flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap"><User className="w-4 h-4 text-slate-400 shrink-0" /> <span className="font-bold text-slate-700">{truck.driver}</span></p>
+                            {truck.phone && (
+                              <a
+                                href={formatWhatsAppUrl(truck.phone, truck.driver, truck.tractor_plate) || '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 bg-[#25D366] hover:bg-[#128C7E] text-white px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shadow-xs shrink-0"
+                                title={`Hablar por WhatsApp con ${truck.driver} (${truck.phone})`}
+                              >
+                                <MessageSquare className="w-3 h-3 fill-current" />
+                                <span>WSP</span>
+                              </a>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
+                          <p className="flex items-center gap-2"><Package className="w-4 h-4 text-slate-400" /> <span className="font-semibold text-slate-500">Carga:</span> <span className="text-slate-700 font-semibold">{truck.carrier}</span></p>
+                          
+                          {truck.status === 'en_ruta' ? (
+                            <p className="flex items-center gap-2 text-cyan-800 font-bold">
+                              <Clock className="w-4 h-4 text-cyan-600" /> 
+                              <span>Despachado P2: {truck.dispatch_time ? new Date(truck.dispatch_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : 'Reciente'}</span>
+                            </p>
+                          ) : (
+                            <p className="flex items-center gap-2">
+                              <Clock className="w-4 h-4 text-slate-400" /> 
+                              <span>Programado: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span>
+                            </p>
+                          )}
+
+                          {truck.scheduled_entry_time && truck.scheduled_end_time && (
+                            <p className="text-[10px] text-[#0a5c36] font-bold pl-6">
+                              Citación: {new Date(truck.scheduled_entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} - {new Date(truck.scheduled_end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
+                            </p>
                           )}
                         </div>
-                        <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
-                        <p className="flex items-center gap-2"><Package className="w-4 h-4 text-slate-400" /> <span className="font-semibold text-slate-500">Carga:</span> <span className="text-slate-700 font-semibold">{truck.carrier}</span></p>
-                        
-                        {truck.status === 'en_ruta' ? (
-                          <p className="flex items-center gap-2 text-cyan-800 font-bold">
-                            <Clock className="w-4 h-4 text-cyan-600" /> 
-                            <span>Despachado P2: {truck.dispatch_time ? new Date(truck.dispatch_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : 'Reciente'}</span>
-                          </p>
-                        ) : (
-                          <p className="flex items-center gap-2">
-                            <Clock className="w-4 h-4 text-slate-400" /> 
-                            <span>Programado: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span>
-                          </p>
-                        )}
 
-                        {truck.scheduled_entry_time && truck.scheduled_end_time && (
-                          <p className="text-[10px] text-[#0a5c36] font-bold pl-6">
-                            Citación: {new Date(truck.scheduled_entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} - {new Date(truck.scheduled_end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
-                          </p>
-                        )}
+                        <div className="pt-2 space-y-1.5">
+                          <button
+                            onClick={() => handleMoveToYard(truck.id)}
+                            className="flex items-center justify-center gap-2 bg-emerald-50 hover:bg-[#0a5c36] text-[#0a5c36] hover:text-white border border-[#0a5c36]/20 text-xs py-2.5 rounded-xl font-bold w-full transition-colors active:scale-98 cursor-pointer shadow-sm"
+                          >
+                            {truck.status === 'en_ruta' || truck.status === 'planta_carga' ? '📥 Registrar Llegada a Patio' : 'Registrar Entrada Patio'}
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedTruckForTimeline(truck);
+                            }}
+                            className="flex items-center justify-center gap-1.5 text-[10px] text-slate-500 hover:text-slate-800 font-bold w-full py-1 cursor-pointer"
+                          >
+                            <Activity className="w-3.5 h-3.5 text-cyan-600" />
+                            Ver Trazabilidad
+                          </button>
+                        </div>
                       </div>
-
-                      <div className="pt-2 space-y-1.5">
-                        <button
-                          onClick={() => handleMoveToYard(truck.id)}
-                          className="flex items-center justify-center gap-2 bg-emerald-50 hover:bg-[#0a5c36] text-[#0a5c36] hover:text-white border border-[#0a5c36]/20 text-xs py-2.5 rounded-xl font-bold w-full transition-colors active:scale-98 cursor-pointer shadow-sm"
-                        >
-                          {truck.status === 'en_ruta' ? '📥 Registrar Llegada a Patio' : 'Registrar Entrada Patio'}
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedTruckForTimeline(truck);
-                          }}
-                          className="flex items-center justify-center gap-1.5 text-[10px] text-slate-500 hover:text-slate-800 font-bold w-full py-1 cursor-pointer"
-                        >
-                          <Activity className="w-3 h-3 text-cyan-600" />
-                          Ver Trazabilidad
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                  {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta').length === 0 && (
-                    <div className="text-center py-16 text-slate-400 text-sm font-semibold">No hay citas ni camiones en ruta</div>
-                  )}
+                    ))}
+                    {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta' || (searchQuery.trim().length > 0 && t.origin === 'planta_2' && t.status === 'planta_carga')).length === 0 && (
+                      <div className="text-center py-16 text-slate-400 text-sm font-semibold">No hay citas ni camiones en ruta</div>
+                    )}
+                  </div>
                 </div>
-              </div>
               
               {/* 2. Columna: Espera en Patio */}
               <div 
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, 'espera')}
-                className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]"
+                className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 flex-col min-h-[500px] ${
+                  mobileYardColumn !== 'all' && mobileYardColumn !== 'espera' ? 'hidden md:flex' : 'flex'
+                }`}
               >
                 <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
                   <div className="flex items-center gap-2">
@@ -2646,7 +2960,9 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               <div 
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, 'anden')}
-                className="bg-slate-100 border border-slate-200 rounded-2xl p-5 flex flex-col min-h-[500px]"
+                className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 sm:p-5 flex-col min-h-[500px] ${
+                  mobileYardColumn !== 'all' && mobileYardColumn !== 'anden' ? 'hidden md:flex' : 'flex'
+                }`}
               >
                 <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
                   <div className="flex items-center gap-2">
@@ -2776,7 +3092,9 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               <div 
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, 'completado')}
-                className="bg-slate-100 border border-slate-200 rounded-2xl p-5 flex flex-col min-h-[500px]"
+                className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 sm:p-5 flex-col min-h-[500px] ${
+                  mobileYardColumn !== 'all' && mobileYardColumn !== 'completado' ? 'hidden md:flex' : 'flex'
+                }`}
               >
                 <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
                   <div className="flex items-center gap-2">
@@ -2885,6 +3203,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               </div>
 
             </section>
+            </div>
           ) : activeTab === 'planta2' ? (
             
             /* ====================================================
@@ -3034,11 +3353,62 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 </div>
               )}
 
+              {/* Selector de Columnas Móvil para Planta 2 (md:hidden) */}
+              <div className="md:hidden flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none select-none">
+                <button
+                  type="button"
+                  onClick={() => setMobilePlanta2Column('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobilePlanta2Column === 'all' ? 'bg-[#0a5c36] text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  Todas ({filteredTrucks.filter(t => t.origin === 'planta_2').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePlanta2Column('planta_carga')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobilePlanta2Column === 'planta_carga' ? 'bg-cyan-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  1. En Carga ({filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'planta_carga').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePlanta2Column('en_ruta')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobilePlanta2Column === 'en_ruta' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  2. En Ruta ({filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'en_ruta').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePlanta2Column('patio_cd')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobilePlanta2Column === 'patio_cd' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  3. En Patio ({filteredTrucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden')).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePlanta2Column('completado')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    mobilePlanta2Column === 'completado' ? 'bg-slate-700 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  4. Entregados ({filteredTrucks.filter(t => t.origin === 'planta_2' && t.status === 'completado').length})
+                </button>
+              </div>
+
               {/* Kanban Board Planta 2 (4 Columnas) */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                 
                 {/* 1. Columna: En Carga (Planta 2) */}
-                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]">
+                <div className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 flex-col min-h-[500px] ${
+                  mobilePlanta2Column !== 'all' && mobilePlanta2Column !== 'planta_carga' ? 'hidden md:flex' : 'flex'
+                }`}>
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
                     <div className="flex items-center gap-2">
                       <span className="w-3 h-3 rounded-full bg-cyan-500"></span>
@@ -3128,7 +3498,9 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 </div>
 
                 {/* 2. Columna: En Ruta (Camino a Patio CD) */}
-                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]">
+                <div className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 flex-col min-h-[500px] ${
+                  mobilePlanta2Column !== 'all' && mobilePlanta2Column !== 'en_ruta' ? 'hidden md:flex' : 'flex'
+                }`}>
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
                     <div className="flex items-center gap-2">
                       <span className="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></span>
@@ -3226,7 +3598,9 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 </div>
 
                 {/* 3. Columna: En Patio CD / Andén (Seguimiento P2) */}
-                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]">
+                <div className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 flex-col min-h-[500px] ${
+                  mobilePlanta2Column !== 'all' && mobilePlanta2Column !== 'patio_cd' ? 'hidden md:flex' : 'flex'
+                }`}>
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
                     <div className="flex items-center gap-2">
                       <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
@@ -3307,7 +3681,9 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 </div>
 
                 {/* 4. Columna: Entregados / Completados */}
-                <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px]">
+                <div className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[500px] ${
+                  mobilePlanta2Column !== 'all' && mobilePlanta2Column !== 'completado' ? 'hidden md:flex' : 'flex'
+                }`}>
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
                     <div className="flex items-center gap-2">
                       <span className="w-3 h-3 rounded-full bg-slate-400"></span>

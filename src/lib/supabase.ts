@@ -46,8 +46,8 @@ const getDbSchema = (): string => {
   return 'dock';
 };
 
-const resolvedSchema = getDbSchema();
-console.log(`[Multi-Tenant] Esquema de base de datos resuelto contextualmente: "${resolvedSchema}"`);
+export const resolvedSchema = getDbSchema();
+export const activeSchema = resolvedSchema;
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   db: { schema: resolvedSchema }
