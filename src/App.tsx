@@ -51,6 +51,7 @@ import {
 } from 'lucide-react';
 import { supabase, supabaseMain, activeSchema } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
+import laPreferidaLogo from './assets/la-preferida-logo.png';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 export const OWNER_EMAILS = ['ariel.mella@cial.cl'];
@@ -213,14 +214,13 @@ export function ControlDeCargaDocument({ data }: { data: CargoDocState }) {
     <div className="w-full font-sans text-black bg-white select-none text-[11px] leading-tight">
       {/* 1. Header Oficial: Logo La Preferida, Título Andén y Fecha */}
       <div className="flex items-start justify-between gap-4 mb-2">
-        {/* Logo Ovalado La Preferida */}
+        {/* Logo Oficial La Preferida */}
         <div className="flex items-center">
-          <div className="border border-black rounded-[22px] p-0.5 bg-white shadow-xs">
-            <div className="bg-black text-white px-3.5 py-1 rounded-[20px] flex items-center justify-center">
-              <span className="font-serif italic font-bold text-xs mr-1 text-white">La</span>
-              <span className="font-black text-sm tracking-wide text-white">Preferida</span>
-            </div>
-          </div>
+          <img 
+            src={laPreferidaLogo} 
+            alt="La Preferida" 
+            className="h-10 sm:h-11 w-auto object-contain max-w-[130px]"
+          />
         </div>
 
         {/* Título Central y Andén */}
@@ -7360,8 +7360,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             {/* Encabezado del Modal */}
             <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-cyan-600 text-white flex items-center justify-center shadow-md shadow-cyan-600/20 shrink-0">
-                  <FileText className="w-5 h-5" />
+                <div className="h-11 px-2.5 rounded-2xl bg-white border border-slate-200 flex items-center justify-center shadow-xs shrink-0">
+                  <img src={laPreferidaLogo} alt="La Preferida" className="h-8 w-auto object-contain" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
