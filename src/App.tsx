@@ -651,7 +651,6 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [p2PalletPlasticos, setP2PalletPlasticos] = useState('');
   const [p2Vuelta, setP2Vuelta] = useState('1°');
   const [p2Anden, setP2Anden] = useState('');
-  const [p2ShowExtraCargoFields, setP2ShowExtraCargoFields] = useState(false);
 
   // Campos del modal de ingreso
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
@@ -2015,7 +2014,6 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       setP2PalletPlasticos('');
       setP2Vuelta('1°');
       setP2Anden('');
-      setP2ShowExtraCargoFields(false);
       
       fetchData();
     } catch (err: any) {
@@ -2067,8 +2065,168 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     setShowCargoDocModal(true);
   };
 
-  const handleSaveCargoDoc = () => {
+  // Abrir Control de Carga directamente con vista previa desde el modal de ingreso de Planta 2
+  const openCargoDocFromAddModal = () => {
+    const finalTractor = isManualTractor 
+      ? manualTractorPlate.trim().toUpperCase() 
+      : (vehicles.find(v => v.id === selectedTractorId)?.plate || manualTractorPlate.trim().toUpperCase() || '');
+    const finalTrailer = isManualTrailer 
+      ? manualTrailerPlate.trim().toUpperCase() 
+      : (vehicles.find(v => v.id === selectedTrailerId)?.plate || manualTrailerPlate.trim().toUpperCase() || '');
+    
+    let finalDriverName = '';
+    if (selectedDriverId === 'manual') {
+      finalDriverName = manualDriverName.trim() || (driverRut.trim() ? `Chofer ${driverRut.trim()}` : '');
+    } else {
+      const driverObj = drivers.find(d => d.id === selectedDriverId);
+      finalDriverName = driverObj?.name || manualDriverName.trim() || '';
+    }
+
+    const finalRut = driverRut.trim() ? formatRutChile(driverRut.trim()) : (drivers.find(d => d.id === selectedDriverId)?.rut || '');
+
+    setCargoDocData(prev => ({
+      ...prev,
+      driver: finalDriverName || prev.driver,
+      rut: finalRut || prev.rut,
+      tractorPlate: finalTractor || prev.tractorPlate,
+      trailerPlate: finalTrailer || prev.trailerPlate,
+      fecha: prev.fecha || formatChileanDate(),
+      destino: prev.destino || 'Centro Distrib.- P1',
+      kilos: p2Kilos.trim() || prev.kilos,
+      docTransporte: p2DocTransporte.trim() || prev.docTransporte,
+      sellos: p2Sellos.trim() || prev.sellos,
+      entregaNum: p2Entrega.trim() || prev.entregaNum,
+      bandejas: p2Bandejas.trim() || prev.bandejas,
+      palletMadera: p2PalletMadera.trim() || prev.palletMadera,
+      palletPlasticos: p2PalletPlasticos.trim() || prev.palletPlasticos,
+      vuelta: p2Vuelta || prev.vuelta || '1°',
+      anden: p2Anden.trim() || prev.anden
+    }));
+
+    const draftTruck: YardOperation = {
+      id: 'draft-p2-new',
+      driver: finalDriverName || 'Chofer Despacho',
+      rut: finalRut || '',
+      phone: driverPhone.trim() || '',
+      tractor_plate: finalTractor || 'S/P',
+      trailer_plate: finalTrailer || '',
+      patent: finalTractor || 'S/P',
+      driver_id: selectedDriverId !== 'manual' && selectedDriverId ? selectedDriverId : null,
+      carrier: cargoType === 'Otro' ? (customCargoType.trim() || 'Otro') : cargoType,
+      type: 'Descarga',
+      status: 'planta_carga',
+      origin: 'planta_2',
+      dock_id: null,
+      entry_time: new Date().toISOString(),
+      plant_loading_time: new Date().toISOString(),
+      start_time: null,
+      end_time: null,
+      exit_time: null
+    };
+
+    setSelectedTruckForCargoDoc(draftTruck);
+    setShowCargoDocModal(true);
+  };
+
+  const handleCloseCargoDocModal = () => {
+    if (selectedTruckForCargoDoc?.id === 'draft-p2-new') {
+      if (cargoDocData.kilos) setP2Kilos(cargoDocData.kilos);
+      if (cargoDocData.docTransporte) setP2DocTransporte(cargoDocData.docTransporte);
+      if (cargoDocData.sellos) setP2Sellos(cargoDocData.sellos);
+      if (cargoDocData.entregaNum) setP2Entrega(cargoDocData.entregaNum);
+      if (cargoDocData.bandejas) setP2Bandejas(cargoDocData.bandejas);
+      if (cargoDocData.palletMadera) setP2PalletMadera(cargoDocData.palletMadera);
+      if (cargoDocData.palletPlasticos) setP2PalletPlasticos(cargoDocData.palletPlasticos);
+      if (cargoDocData.vuelta) setP2Vuelta(cargoDocData.vuelta);
+      if (cargoDocData.anden) setP2Anden(cargoDocData.anden);
+      if (cargoDocData.driver && (!manualDriverName || selectedDriverId === 'manual')) {
+        setManualDriverName(cargoDocData.driver);
+      }
+      if (cargoDocData.rut) setDriverRut(cargoDocData.rut);
+      if (cargoDocData.tractorPlate) {
+        setManualTractorPlate(cargoDocData.tractorPlate);
+        setIsManualTractor(true);
+      }
+      if (cargoDocData.trailerPlate) {
+        setManualTrailerPlate(cargoDocData.trailerPlate);
+        setIsManualTrailer(true);
+      }
+    }
+    setShowCargoDocModal(false);
+  };
+
+  const handleSaveCargoDoc = async () => {
     if (!selectedTruckForCargoDoc) return;
+
+    // Si es un borrador nuevo originado desde el modal de ingreso de Planta 2
+    if (selectedTruckForCargoDoc.id === 'draft-p2-new') {
+      const tractorToSave = (cargoDocData.tractorPlate || selectedTruckForCargoDoc.tractor_plate || '').trim().toUpperCase();
+      const trailerToSave = (cargoDocData.trailerPlate || selectedTruckForCargoDoc.trailer_plate || '').trim().toUpperCase();
+      const driverNameToSave = (cargoDocData.driver || selectedTruckForCargoDoc.driver || '').trim() || 'Chofer Planta 2';
+      const rutToSave = (cargoDocData.rut || selectedTruckForCargoDoc.rut || '').trim();
+      const phoneToSave = selectedTruckForCargoDoc.phone || null;
+
+      if (!tractorToSave || tractorToSave === 'S/P' || tractorToSave === 'S/T') {
+        alert('Por favor ingrese la patente del tractor antes de guardar.');
+        return;
+      }
+
+      try {
+        const savedDriverId = await ensureDriverAndVehiclesSaved(
+          driverNameToSave,
+          rutToSave,
+          phoneToSave || '',
+          tractorToSave,
+          trailerToSave
+        );
+
+        const nowISO = new Date().toISOString();
+        const newOpPayload = {
+          driver_id: savedDriverId || selectedTruckForCargoDoc.driver_id || null,
+          driver: driverNameToSave,
+          rut: rutToSave ? formatRutChile(rutToSave) : null,
+          phone: phoneToSave,
+          tractor_plate: tractorToSave,
+          trailer_plate: trailerToSave || null,
+          carrier: selectedTruckForCargoDoc.carrier || 'Refrigerado',
+          type: 'Descarga' as const,
+          status: 'planta_carga' as const,
+          origin: 'planta_2' as const,
+          plant_loading_time: nowISO,
+          entry_time: nowISO,
+          patent: tractorToSave
+        };
+
+        const { data, error } = await supabase
+          .from('yard_operations')
+          .insert([newOpPayload])
+          .select(`*, dock:dock_id ( name )`);
+
+        if (error) throw error;
+
+        if (data && data[0]) {
+          const created = data[0];
+          setTrucks(prev => [created, ...prev]);
+          setSelectedTruckForCargoDoc(created);
+          try {
+            localStorage.setItem(`nexus_cargo_doc_${created.id}`, JSON.stringify(cargoDocData));
+          } catch (storageErr) {
+            console.error('Error al guardar en localStorage:', storageErr);
+          }
+        }
+
+        setShowPlanta2AddModal(false);
+        setCargoDocSaveMsg('¡Despacho registrado en Planta 2 y Control de Carga guardado!');
+        setTimeout(() => setCargoDocSaveMsg(null), 3000);
+        fetchData();
+      } catch (err: any) {
+        console.error('Error al guardar despacho y control de carga:', err);
+        alert('No se pudo registrar el despacho: ' + (err.message || ''));
+      }
+      return;
+    }
+
+    // Camión ya existente en base de datos
     try {
       localStorage.setItem(`nexus_cargo_doc_${selectedTruckForCargoDoc.id}`, JSON.stringify(cargoDocData));
       setCargoDocSaveMsg('¡Datos de Control de Carga guardados correctamente!');
@@ -2078,11 +2236,11 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     }
   };
 
-  const handlePrintCargoDoc = () => {
-    handleSaveCargoDoc();
+  const handlePrintCargoDoc = async () => {
+    await handleSaveCargoDoc();
     setTimeout(() => {
       window.print();
-    }, 150);
+    }, 200);
   };
 
   // Guardar celular del chofer desde el modal de trazabilidad (actualiza ticket y ficha de chofer)
@@ -5992,137 +6150,30 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 )}
               </div>
 
-              {/* Sección Opcional: Datos Control de Carga */}
-              <div className="pt-1">
+              {/* Botón para Abrir Control de Carga con Vista Previa Directa */}
+              <div className="pt-2">
                 <button
                   type="button"
-                  onClick={() => setP2ShowExtraCargoFields(!p2ShowExtraCargoFields)}
-                  className="flex items-center justify-between w-full p-2.5 rounded-xl bg-cyan-50/70 border border-cyan-200 text-cyan-950 font-bold text-xs hover:bg-cyan-100/70 transition-all cursor-pointer"
+                  onClick={openCargoDocFromAddModal}
+                  className="flex items-center justify-between w-full p-3 rounded-2xl bg-gradient-to-r from-cyan-50 via-emerald-50 to-cyan-50 border-2 border-cyan-400 hover:border-cyan-600 text-cyan-950 font-black text-xs transition-all cursor-pointer shadow-sm hover:shadow-md active:scale-98 group"
                 >
-                  <span className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-cyan-700" />
-                    <span>Datos extras Control de Carga (Kilos, Sellos, Embalajes)</span>
-                  </span>
-                  <span className="text-[10px] bg-cyan-200/80 px-2 py-0.5 rounded-md font-black">
-                    {p2ShowExtraCargoFields ? 'Ocultar' : 'Completar ahora'}
-                  </span>
-                </button>
-
-                {p2ShowExtraCargoFields && (
-                  <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-3 animate-fadeIn">
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Kilos</label>
-                        <input
-                          type="text"
-                          placeholder="Ej: 8.000"
-                          value={p2Kilos}
-                          onChange={(e) => setP2Kilos(e.target.value)}
-                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Doc. Transporte</label>
-                        <input
-                          type="text"
-                          placeholder="Ej: 3428711"
-                          value={p2DocTransporte}
-                          onChange={(e) => setP2DocTransporte(e.target.value)}
-                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
-                        />
-                      </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-xl bg-cyan-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform shrink-0">
+                      <FileText className="w-4 h-4" />
                     </div>
-
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Sellos</label>
-                        <input
-                          type="text"
-                          placeholder="Ej: 125198"
-                          value={p2Sellos}
-                          onChange={(e) => setP2Sellos(e.target.value)}
-                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">N° Entrega</label>
-                        <input
-                          type="text"
-                          placeholder="Ej: 81479576"
-                          value={p2Entrega}
-                          onChange={(e) => setP2Entrega(e.target.value)}
-                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Detalle Embalajes (Cantidades)</label>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div>
-                          <span className="text-[10px] font-bold text-slate-600 block mb-0.5">Bandejas</span>
-                          <input
-                            type="text"
-                            placeholder="260"
-                            value={p2Bandejas}
-                            onChange={(e) => setP2Bandejas(e.target.value)}
-                            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
-                          />
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-bold text-slate-600 block mb-0.5">Pallet Madera</span>
-                          <input
-                            type="text"
-                            placeholder="0"
-                            value={p2PalletMadera}
-                            onChange={(e) => setP2PalletMadera(e.target.value)}
-                            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
-                          />
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-bold text-slate-600 block mb-0.5">Pallet Plásticos</span>
-                          <input
-                            type="text"
-                            placeholder="25"
-                            value={p2PalletPlasticos}
-                            onChange={(e) => setP2PalletPlasticos(e.target.value)}
-                            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">N° de Viaje / Vuelta</label>
-                        <div className="flex gap-1">
-                          {['1°', '2°', '3°', '4°'].map(v => (
-                            <button
-                              key={v}
-                              type="button"
-                              onClick={() => setP2Vuelta(v)}
-                              className={`flex-1 py-1 rounded-lg text-xs font-black border transition-all cursor-pointer ${
-                                p2Vuelta === v ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-white text-slate-700 border-slate-200'
-                              }`}
-                            >
-                              {v}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Andén (Opcional)</label>
-                        <input
-                          type="text"
-                          placeholder="Ej: 10"
-                          value={p2Anden}
-                          onChange={(e) => setP2Anden(e.target.value)}
-                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
-                        />
-                      </div>
+                    <div className="text-left">
+                      <span className="block font-black text-xs text-slate-900">
+                        Datos extras Control de Carga (Kilos, Sellos, Embalajes)
+                      </span>
+                      <span className="block text-[10px] text-cyan-800 font-semibold mt-0.5">
+                        Abre la hoja oficial con vista previa en vivo para completar e imprimir
+                      </span>
                     </div>
                   </div>
-                )}
+                  <span className="text-[11px] bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-3.5 py-1.5 rounded-xl font-black shadow-sm flex items-center gap-1.5 shrink-0 ml-2">
+                    Completar ahora ➔
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -6143,10 +6194,11 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               </button>
               <button 
                 type="button"
-                onClick={(e) => handleAddPlanta2Truck(e, true)}
-                className="bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-cyan-600/20"
+                onClick={openCargoDocFromAddModal}
+                className="bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-cyan-600/20 flex items-center justify-center gap-1.5"
               >
-                📄 Registrar y Abrir Control de Carga
+                <FileText className="w-3.5 h-3.5" />
+                <span>📄 Control de Carga con Vista Previa</span>
               </button>
             </div>
           </form>
@@ -7353,7 +7405,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
           <div 
             className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
-            onClick={() => setShowCargoDocModal(false)}
+            onClick={handleCloseCargoDocModal}
           />
 
           <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-6xl max-h-[92vh] flex flex-col relative z-10 shadow-2xl overflow-hidden animate-fadeIn text-slate-800">
@@ -7366,12 +7418,16 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="font-black text-lg text-slate-900 leading-tight">Control de Carga Oficial</h3>
-                    <span className="bg-cyan-100 text-cyan-800 text-[10px] font-black uppercase px-2 py-0.5 rounded-full border border-cyan-200">
-                      Planta 2 ➔ Planta 1
+                    <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${
+                      selectedTruckForCargoDoc.id === 'draft-p2-new'
+                        ? 'bg-amber-100 text-amber-900 border-amber-300'
+                        : 'bg-cyan-100 text-cyan-800 border-cyan-200'
+                    }`}>
+                      {selectedTruckForCargoDoc.id === 'draft-p2-new' ? 'Planta 2 ➔ Planta 1 (Nuevo Despacho)' : 'Planta 2 ➔ Planta 1'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 font-semibold mt-0.5">
-                    Camión: {selectedTruckForCargoDoc.tractor_plate || selectedTruckForCargoDoc.patent || 'S/P'} • Conductor: {selectedTruckForCargoDoc.driver}
+                    Camión: {cargoDocData.tractorPlate || selectedTruckForCargoDoc.tractor_plate || 'Por ingresar'} • Conductor: {cargoDocData.driver || selectedTruckForCargoDoc.driver || 'Por ingresar'}
                   </p>
                 </div>
               </div>
@@ -7384,7 +7440,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border border-slate-300"
                 >
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Guardar</span>
+                  <span>{selectedTruckForCargoDoc.id === 'draft-p2-new' ? 'Registrar y Guardar' : 'Guardar'}</span>
                 </button>
                 <button
                   type="button"
@@ -7392,11 +7448,11 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   className="flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md shadow-cyan-600/25 active:scale-95"
                 >
                   <Printer className="w-4 h-4" />
-                  <span>🖨️ Imprimir Hoja</span>
+                  <span>{selectedTruckForCargoDoc.id === 'draft-p2-new' ? '🖨️ Registrar e Imprimir' : '🖨️ Imprimir Hoja'}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowCargoDocModal(false)}
+                  onClick={handleCloseCargoDocModal}
                   className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
                   title="Cerrar ventana"
                 >
@@ -7688,7 +7744,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
               <button
                 type="button"
-                onClick={() => setShowCargoDocModal(false)}
+                onClick={handleCloseCargoDocModal}
                 className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 Cerrar
@@ -7700,7 +7756,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   onClick={handleSaveCargoDoc}
                   className="bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
                 >
-                  💾 Guardar Datos
+                  {selectedTruckForCargoDoc.id === 'draft-p2-new' ? '💾 Registrar Despacho Planta 2' : '💾 Guardar Datos'}
                 </button>
                 <button
                   type="button"
@@ -7708,7 +7764,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   className="bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md shadow-cyan-600/25 active:scale-95 flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
-                  <span>🖨️ Imprimir Hoja Oficial</span>
+                  <span>{selectedTruckForCargoDoc.id === 'draft-p2-new' ? '🖨️ Registrar e Imprimir Hoja Oficial' : '🖨️ Imprimir Hoja Oficial'}</span>
                 </button>
               </div>
             </div>
