@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Calendar, 
   Clock, 
@@ -47,12 +47,28 @@ import {
   X,
   Radio,
   Printer,
-  FileText
+  FileText,
+  BellRing,
+  BellOff,
+  Volume2,
+  VolumeX,
+  Smartphone
 } from 'lucide-react';
 import { supabase, supabaseMain, activeSchema } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
 import laPreferidaLogo from './assets/la-preferida-logo.png';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
+import {
+  registerServiceWorker,
+  getNotificationPermissionState,
+  requestNotificationPermission,
+  areNotificationsEnabled,
+  setNotificationsEnabled,
+  isSoundEnabled,
+  setSoundEnabled,
+  sendMobileNotification,
+  playNotificationSound
+} from './utils/notifications';
 
 export const OWNER_EMAILS = ['ariel.mella@cial.cl'];
 
@@ -591,6 +607,18 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
 
+  // States para Notificaciones Móviles, Audio Háptico y PWA
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => getNotificationPermissionState());
+  const [notificationsActive, setNotificationsActive] = useState<boolean>(() => areNotificationsEnabled());
+  const [soundActive, setSoundActive] = useState<boolean>(() => isSoundEnabled());
+  const [showNotificationModal, setShowNotificationModal] = useState<boolean>(false);
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const alertedOvertimeIds = useRef<Set<string>>(new Set());
+  const trucksRef = useRef<YardOperation[]>([]);
+  trucksRef.current = trucks;
+  const docksRef = useRef<Dock[]>([]);
+  docksRef.current = docks;
+
   // States para Módulo Nexus Owner - Usuarios
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [loadingAdminUsers, setLoadingAdminUsers] = useState(false);
@@ -834,7 +862,49 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               if (prev.some(t => t.id === payload.new.id)) return prev;
               return [payload.new, ...prev];
             });
+
+            // 1. Llegada a Patio en INSERT
+            if (payload.new.status === 'espera') {
+              const plate = payload.new.patent || payload.new.tractor_plate || 'S/P';
+              const driver = payload.new.driver || 'Chofer';
+              sendMobileNotification({
+                title: '🚛 Llegada a Patio',
+                body: `Camión ${plate} / ${driver} acaba de anunciar llegada a Patio.`,
+                type: 'arrival',
+                tag: `arrival-${payload.new.id}`
+              });
+            }
           } else if (payload.eventType === 'UPDATE' && payload.new) {
+            const oldTruck = trucksRef.current.find(t => t.id === payload.new.id);
+            const oldStatus = oldTruck?.status || payload.old?.status;
+            const newStatus = payload.new.status;
+
+            // 1. Llegada a Patio: Transición a espera
+            if (newStatus === 'espera' && oldStatus && oldStatus !== 'espera') {
+              const plate = payload.new.patent || payload.new.tractor_plate || 'S/P';
+              const driver = payload.new.driver || 'Chofer';
+              sendMobileNotification({
+                title: '🚛 Llegada a Patio',
+                body: `Camión ${plate} / ${driver} acaba de anunciar llegada a Patio.`,
+                type: 'arrival',
+                tag: `arrival-${payload.new.id}`
+              });
+            }
+
+            // 2. Asignación de Andén: Transición a 'anden' o cambio de dock_id
+            if (newStatus === 'anden' && (oldStatus !== 'anden' || (oldTruck && oldTruck.dock_id !== payload.new.dock_id))) {
+              const plate = payload.new.patent || payload.new.tractor_plate || 'S/P';
+              const dockObj = docksRef.current.find(d => d.id === payload.new.dock_id) || payload.new.dock;
+              const rawName = dockObj?.name || 'Andén';
+              const dockName = rawName.toLowerCase().includes('andén') || rawName.toLowerCase().includes('anden') ? rawName : `Andén ${rawName}`;
+              sendMobileNotification({
+                title: '🚪 Asignación de Andén',
+                body: `Camión ${plate} asignado al ${dockName} para descarga.`,
+                type: 'assignment',
+                tag: `assignment-${payload.new.id}`
+              });
+            }
+
             setTrucks(prev => prev.map(t => t.id === payload.new.id ? { ...t, ...payload.new } : t));
           } else if (payload.eventType === 'DELETE' && payload.old) {
             setTrucks(prev => prev.filter(t => t.id !== payload.old.id));
@@ -894,6 +964,65 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  // Inicialización de Service Worker PWA y captura de evento de instalación
+  useEffect(() => {
+    registerServiceWorker().then(() => {
+      setNotificationPermission(getNotificationPermissionState());
+    });
+
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+  }, []);
+
+  // 3. ⚠️ Alertas de Demora: «Camión en Andén X superó el tiempo estimado de descarga»
+  useEffect(() => {
+    if (trucks.length === 0) return;
+    const nowMs = Date.now();
+    const andenedTrucks = trucks.filter(t => t.status === 'anden' && t.start_time);
+
+    andenedTrucks.forEach(truck => {
+      const startTime = new Date(truck.start_time!).getTime();
+      let durationMs = PERMITTED_OPERATION_TIME_MS;
+      if (truck.scheduled_entry_time && truck.scheduled_end_time) {
+        const schStart = new Date(truck.scheduled_entry_time).getTime();
+        const schEnd = new Date(truck.scheduled_end_time).getTime();
+        const diff = schEnd - schStart;
+        if (diff > 0) durationMs = diff;
+      }
+
+      const limitTime = startTime + durationMs;
+      const isOvertime = limitTime - nowMs < 0;
+
+      if (isOvertime && !alertedOvertimeIds.current.has(truck.id)) {
+        alertedOvertimeIds.current.add(truck.id);
+        const dockObj = docksRef.current.find(d => d.id === truck.dock_id) || truck.dock;
+        const rawName = dockObj?.name || 'Andén';
+        const dockName = rawName.toLowerCase().includes('andén') || rawName.toLowerCase().includes('anden') ? rawName : `Andén ${rawName}`;
+        const plate = truck.patent || truck.tractor_plate || '';
+
+        sendMobileNotification({
+          title: '⚠️ Alerta de Demora',
+          body: `Camión ${plate ? `[${plate}] ` : ''}en ${dockName} superó el tiempo estimado de descarga.`,
+          type: 'alert',
+          tag: `overtime-${truck.id}`
+        });
+      }
+    });
+
+    // Limpiar camiones que ya no están en andén
+    const currentAndenIds = new Set(andenedTrucks.map(t => t.id));
+    alertedOvertimeIds.current.forEach(id => {
+      if (!currentAndenIds.has(id)) {
+        alertedOvertimeIds.current.delete(id);
+      }
+    });
+  }, [trucks, currentTime]);
 
   // Cargar usuarios cuando se selecciona la pestaña de usuarios
   useEffect(() => {
@@ -2315,6 +2444,17 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       return t;
     }));
 
+    if (truck) {
+      const plate = truck.patent || truck.tractor_plate || 'S/P';
+      const driver = truck.driver || 'Chofer';
+      sendMobileNotification({
+        title: '🚛 Llegada a Patio',
+        body: `Camión ${plate} / ${driver} acaba de anunciar llegada a Patio.`,
+        type: 'arrival',
+        tag: `arrival-${truckId}`
+      });
+    }
+
     try {
       const updatePayload: Record<string, any> = {
         status: 'espera',
@@ -2555,12 +2695,20 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       return t;
     }));
 
-    setDocks(prev => prev.map(d => {
-      if (d.id === dockId) {
-        return { ...d, status: 'Ocupado' as const };
-      }
-      return d;
-    }));
+    setDocks(prev => prev.map(d => d.id === dockId ? { ...d, status: 'Ocupado' as const } : d));
+
+    const truck = trucks.find(t => t.id === truckId);
+    if (truck) {
+      const plate = truck.patent || truck.tractor_plate || 'S/P';
+      const rawName = selectedDock.name || 'Andén';
+      const dockName = rawName.toLowerCase().includes('andén') || rawName.toLowerCase().includes('anden') ? rawName : `Andén ${rawName}`;
+      sendMobileNotification({
+        title: '🚪 Asignación de Andén',
+        body: `Camión ${plate} asignado al ${dockName} para descarga.`,
+        type: 'assignment',
+        tag: `assignment-${truckId}`
+      });
+    }
 
     try {
       const { error: opError } = await supabase
@@ -2861,6 +3009,78 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     return duration <= allowedDurationMs ? 'A Tiempo' : 'Atrasado';
   };
 
+  // Control de Notificaciones Móviles y PWA
+  const handleToggleNotifications = async () => {
+    if (notificationPermission !== 'granted') {
+      const granted = await requestNotificationPermission();
+      if (granted) {
+        setNotificationPermission('granted');
+        setNotificationsActive(true);
+        setNotificationsEnabled(true);
+        sendMobileNotification({
+          title: '🔔 Notificaciones Activadas',
+          body: 'Recibirás avisos de llegada a patio, asignación de andén y demoras.',
+          type: 'arrival'
+        });
+      } else {
+        alert('Para recibir alertas en tu celular, debes permitir las notificaciones en la ventana del navegador.');
+      }
+    } else {
+      const next = !notificationsActive;
+      setNotificationsActive(next);
+      setNotificationsEnabled(next);
+    }
+  };
+
+  const handleToggleSound = () => {
+    const next = !soundActive;
+    setSoundActive(next);
+    setSoundEnabled(next);
+    if (next) {
+      playNotificationSound('arrival');
+    }
+  };
+
+  const handlePromptInstall = async () => {
+    if (installPrompt) {
+      installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        setInstallPrompt(null);
+      }
+    } else {
+      alert('Para instalar en Android:\n1. Toca el menú (⋮) de Google Chrome.\n2. Toca "Instalar aplicación" o "Agregar a pantalla principal".\n\nPara instalar en iPhone (Safari):\n1. Toca el botón Compartir (cuadrado con flecha).\n2. Selecciona "Agregar al inicio".');
+    }
+  };
+
+  // Disparadores de Prueba en Celular
+  const handleTestArrival = () => {
+    sendMobileNotification({
+      title: '🚛 Llegada a Patio',
+      body: 'Camión AB-CD-12 / Pedro Godoy acaba de anunciar llegada a Patio.',
+      type: 'arrival',
+      tag: 'test-arrival'
+    });
+  };
+
+  const handleTestAssignment = () => {
+    sendMobileNotification({
+      title: '🚪 Asignación de Andén',
+      body: 'Camión AB-CD-12 asignado al Andén 3 para descarga.',
+      type: 'assignment',
+      tag: 'test-assignment'
+    });
+  };
+
+  const handleTestDelay = () => {
+    sendMobileNotification({
+      title: '⚠️ Alerta de Demora',
+      body: 'Camión en Andén 3 superó el tiempo estimado de descarga.',
+      type: 'alert',
+      tag: 'test-delay'
+    });
+  };
+
   return (
     <div className="min-h-screen bg-[#f1f5f9] text-slate-800 flex font-sans">
       
@@ -3016,6 +3236,27 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             </div>
           </div>
 
+          {/* Botón Acceso Rápido a Notificaciones Móviles */}
+          <button
+            type="button"
+            onClick={() => {
+              setShowNotificationModal(true);
+              setIsMobileMenuOpen(false);
+            }}
+            className="flex items-center justify-between w-full text-emerald-100 hover:text-white hover:bg-white/10 px-3 py-2 rounded-xl transition-all cursor-pointer font-bold text-xs"
+            title="Configurar notificaciones en celular"
+          >
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-3.5 h-3.5 shrink-0 text-emerald-300" />
+              <span>Alertas en Celular</span>
+            </div>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded font-black uppercase ${
+              notificationsActive ? 'bg-emerald-400 text-slate-950' : 'bg-white/10 text-white/70'
+            }`}>
+              {notificationsActive ? 'On' : 'Off'}
+            </span>
+          </button>
+
           <button
             onClick={() => setShowChangePasswordModal(true)}
             className="flex items-center gap-2 w-full text-emerald-100 hover:text-white hover:bg-white/10 px-3 py-2 rounded-xl transition-all cursor-pointer font-bold text-xs"
@@ -3104,6 +3345,27 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 </button>
               )}
             </div>
+
+            {/* Botón de Notificaciones Móviles y PWA */}
+            <button 
+              type="button"
+              onClick={() => setShowNotificationModal(true)}
+              title={notificationsActive ? "Notificaciones Activas - Clic para probar o configurar" : "Activar Notificaciones en Celular"}
+              className={`relative p-2 rounded-xl border transition-all cursor-pointer active:scale-95 shadow-sm flex items-center justify-center shrink-0 ${
+                notificationsActive 
+                  ? 'border-emerald-300 bg-emerald-50 text-[#0a5c36]' 
+                  : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-500'
+              }`}
+            >
+              {notificationsActive ? (
+                <BellRing className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <BellOff className="w-3.5 h-3.5 text-slate-400" />
+              )}
+              {notificationsActive && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
+              )}
+            </button>
 
             {/* Botón de Refrescar */}
             <button 
@@ -7767,6 +8029,197 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   <span>{selectedTruckForCargoDoc.id === 'draft-p2-new' ? '🖨️ Registrar e Imprimir Hoja Oficial' : '🖨️ Imprimir Hoja Oficial'}</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Configuración y Prueba de Notificaciones Móviles */}
+      {showNotificationModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl overflow-hidden border border-slate-200 flex flex-col max-h-[92vh]">
+            
+            {/* Cabecera */}
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-[#0a5c36] to-[#0d7343] text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-white/10 rounded-2xl border border-white/20">
+                  <Smartphone className="w-5 h-5 text-emerald-200" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm sm:text-base leading-tight">
+                    Notificaciones en Celular
+                  </h3>
+                  <p className="text-[11px] text-emerald-100 font-medium">
+                    Alertas en tiempo real para Gestor Inbound
+                  </p>
+                </div>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => setShowNotificationModal(false)}
+                className="p-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Contenido */}
+            <div className="p-4 sm:p-5 space-y-4 overflow-y-auto">
+              
+              {/* Estado de Permiso de Notificación del Sistema */}
+              <div className="p-4 rounded-2xl border bg-slate-50 border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    {notificationsActive ? (
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                        <CheckCircle2 className="w-5 h-5" />
+                      </div>
+                    ) : (
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                        <BellOff className="w-5 h-5" />
+                      </div>
+                    )}
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">
+                        {notificationsActive ? 'Alertas Activadas' : 'Alertas Desactivadas'}
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-medium">
+                        {notificationPermission === 'granted' 
+                          ? 'Permiso de notificaciones concedido' 
+                          : 'Requiere permiso del navegador'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleToggleNotifications}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer shadow-sm ${
+                      notificationsActive
+                        ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-200'
+                        : 'bg-[#0a5c36] text-white hover:bg-[#08482a]'
+                    }`}
+                  >
+                    {notificationsActive ? 'Pausar' : 'Activar Alertas'}
+                  </button>
+                </div>
+
+                {notificationPermission !== 'granted' && (
+                  <div className="text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200 leading-relaxed">
+                    💡 <strong>Tip:</strong> Al tocar <em>"Activar Alertas"</em>, presiona <strong>"Permitir"</strong> cuando tu celular o navegador te pregunte.
+                  </div>
+                )}
+              </div>
+
+              {/* Ajuste de Sonido y Vibración */}
+              <div className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-200 bg-white">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-slate-100 text-slate-700">
+                    {soundActive ? <Volume2 className="w-4 h-4 text-[#0a5c36]" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-slate-800">Sonido y Chimes Acústicos</div>
+                    <div className="text-[10px] text-slate-500 font-medium">
+                      {soundActive ? 'Reproduce tono melódico + vibración háptica' : 'Silencioso (solo visual)'}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleToggleSound}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                    soundActive 
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
+                      : 'bg-slate-100 text-slate-600 border-slate-300'
+                  }`}
+                >
+                  {soundActive ? 'Activado' : 'Silenciado'}
+                </button>
+              </div>
+
+              {/* Botones de Prueba en Vivo (los 3 tipos solicitados) */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="text-[11px] font-black uppercase tracking-wider text-slate-500 px-1">
+                  Probar Alertas en este Celular
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTestArrival}
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 hover:bg-emerald-50/70 border border-slate-200 hover:border-emerald-300 text-left transition-all cursor-pointer group active:scale-98"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-base shrink-0">🚛</span>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-slate-800 group-hover:text-emerald-900">Llegada a Patio</div>
+                        <div className="text-[10px] text-slate-500 truncate">«Camión [Patente / Chofer] acaba de anunciar llegada a Patio»</div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-lg shrink-0 ml-2">
+                      Probar
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleTestAssignment}
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 text-left transition-all cursor-pointer group active:scale-98"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-base shrink-0">🚪</span>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-slate-800 group-hover:text-blue-900">Asignación de Andén</div>
+                        <div className="text-[10px] text-slate-500 truncate">«Camión [Patente] asignado al Andén X para descarga»</div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-extrabold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-lg shrink-0 ml-2">
+                      Probar
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleTestDelay}
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 hover:bg-amber-50/70 border border-slate-200 hover:border-amber-300 text-left transition-all cursor-pointer group active:scale-98"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-base shrink-0">⚠️</span>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-slate-800 group-hover:text-amber-900">Alerta de Demora</div>
+                        <div className="text-[10px] text-slate-500 truncate">«Camión en Andén X superó el tiempo estimado de descarga»</div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-extrabold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-lg shrink-0 ml-2">
+                      Probar
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Botón de Instalación PWA */}
+              <div className="pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={handlePromptInstall}
+                  className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-slate-900 to-slate-800 hover:from-black hover:to-slate-900 text-white font-extrabold py-3 px-4 rounded-2xl text-xs transition-all active:scale-98 cursor-pointer shadow-md"
+                >
+                  <Smartphone className="w-4 h-4 text-emerald-400" />
+                  <span>Instalar Nexus Dock en la Pantalla de Inicio</span>
+                </button>
+              </div>
+
+            </div>
+
+            {/* Pie */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowNotificationModal(false)}
+                className="px-5 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cerrar
+              </button>
             </div>
           </div>
         </div>
