@@ -45,7 +45,9 @@ import {
   Edit2,
   Menu,
   X,
-  Radio
+  Radio,
+  Printer,
+  FileText
 } from 'lucide-react';
 import { supabase, supabaseMain, activeSchema } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -56,6 +58,14 @@ export const OWNER_EMAILS = ['ariel.mella@cial.cl'];
 export const isUserOwner = (email?: string | null): boolean => {
   if (!email) return false;
   return OWNER_EMAILS.includes(email.toLowerCase().trim());
+};
+
+export const formatUserRole = (rawRole?: string | null): string => {
+  if (!rawRole) return 'Gestor Inbound';
+  const clean = rawRole.trim();
+  if (clean === 'Operador Inbound') return 'Gestor Inbound';
+  if (clean === 'Operador Planta 2') return 'Gestor Planta 2';
+  return clean;
 };
 
 export interface AppProps {
@@ -160,6 +170,282 @@ interface YardOperation {
   dock?: {
     name: string;
   } | null;
+}
+
+export interface CargoDocState {
+  anden: string;
+  fecha: string;
+  driver: string;
+  rut: string;
+  tractorPlate: string;
+  trailerPlate: string;
+  destino: string;
+  kilos: string;
+  docTransporte: string;
+  sellos: string;
+  entregaNum: string;
+  bandejas: string;
+  palletMadera: string;
+  palletPlasticos: string;
+  vuelta: string;
+  foliosSap: string;
+  foliosLegales: string;
+  supervisorName: string;
+}
+
+export const formatChileanDate = (dateVal?: Date | string | null): string => {
+  const d = dateVal ? new Date(dateVal) : new Date();
+  if (isNaN(d.getTime())) {
+    const today = new Date();
+    const day = String(today.getDate()).padStart(2, '0');
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const year = today.getFullYear();
+    return `${day}-${month}-${year}`;
+  }
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}-${month}-${year}`;
+};
+
+export function ControlDeCargaDocument({ data }: { data: CargoDocState }) {
+  return (
+    <div className="w-full font-sans text-black bg-white select-none text-[11px] leading-tight">
+      {/* 1. Header Oficial: Logo La Preferida, Título Andén y Fecha */}
+      <div className="flex items-start justify-between gap-4 mb-2">
+        {/* Logo Ovalado La Preferida */}
+        <div className="flex items-center">
+          <div className="border border-black rounded-[22px] p-0.5 bg-white shadow-xs">
+            <div className="bg-black text-white px-3.5 py-1 rounded-[20px] flex items-center justify-center">
+              <span className="font-serif italic font-bold text-xs mr-1 text-white">La</span>
+              <span className="font-black text-sm tracking-wide text-white">Preferida</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Título Central y Andén */}
+        <div className="flex flex-col items-center">
+          <div className="border border-black px-6 py-0.5 font-black text-xs tracking-widest text-center">
+            CONTROL DE CARGA
+          </div>
+          <div className="border border-black border-t-0 px-6 py-0.5 font-black text-[10px] tracking-wider text-center w-full min-h-[18px]">
+            ANDEN {data.anden ? `: ${data.anden}` : ''}
+          </div>
+        </div>
+
+        {/* Fecha DD-MM-YYYY */}
+        <div className="border border-black px-4 py-1 font-black text-xs tracking-wider text-center min-w-[105px]">
+          {data.fecha || formatChileanDate()}
+        </div>
+      </div>
+
+      {/* 2. Barra de Ruta Origen -> Destino */}
+      <div className="border border-black px-3 py-0.5 font-black text-xs tracking-wider mb-2 bg-white">
+        Desde Planta 2 a Planta 1
+      </div>
+
+      {/* 3. Tabla Oficial de Control de Carga */}
+      <table className="w-full border-collapse border border-black text-[11px]">
+        <tbody>
+          {/* Fila: Conductor */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-bold text-[10px] w-28 bg-white">
+              Conductor
+            </td>
+            <td colSpan={3} className="border border-black px-3 py-1 font-black text-xs uppercase bg-slate-200">
+              {data.driver || '-'}
+            </td>
+          </tr>
+
+          {/* Fila: RUT */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-bold text-[10px] bg-white">
+              Rut
+            </td>
+            <td colSpan={3} className="border border-black px-3 py-1 font-bold text-xs bg-white">
+              {data.rut || '-'}
+            </td>
+          </tr>
+
+          {/* Fila: Patentes Tracto y Rampla */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-bold text-[10px] bg-white">
+              Patente tracto
+            </td>
+            <td className="border border-black px-3 py-1.5 font-black text-sm font-mono tracking-widest text-center bg-white">
+              {data.tractorPlate || '-'}
+            </td>
+            <td className="border border-black px-2 py-1 font-bold text-[10px] text-center w-28 bg-white">
+              PTTE. RAMPLA
+            </td>
+            <td className="border border-black px-3 py-1.5 font-black text-sm font-mono tracking-widest text-center bg-white">
+              {data.trailerPlate || '-'}
+            </td>
+          </tr>
+
+          {/* Encabezados de Columnas: Kilos, Doc. Transporte, Sellos */}
+          <tr className="bg-slate-200">
+            <td colSpan={1} className="border border-black bg-white"></td>
+            <td className="border border-black px-2 py-0.5 font-bold text-[10px] text-center w-28">
+              KILOS
+            </td>
+            <td className="border border-black px-2 py-0.5 font-bold text-[10px] text-center">
+              Doc. Transporte
+            </td>
+            <td className="border border-black px-2 py-0.5 font-bold text-[10px] text-center w-28">
+              Sellos
+            </td>
+          </tr>
+
+          {/* Destino y Valores Principales */}
+          <tr>
+            <td className="border border-black p-2 font-black text-xs bg-white align-top">
+              <span className="text-[9px] font-bold block uppercase text-slate-700">DESTINO</span>
+              {data.destino || 'Centro Distrib.- P1'}
+            </td>
+            <td className="border border-black px-2 py-2 font-black text-sm text-center bg-white align-middle">
+              {data.kilos || ''}
+            </td>
+            <td className="border border-black px-2 py-2 font-black text-sm text-center bg-white align-middle">
+              {data.docTransporte || ''}
+            </td>
+            <td className="border border-black px-2 py-2 font-black text-sm text-center bg-white align-middle">
+              {data.sellos || ''}
+            </td>
+          </tr>
+
+          {/* Encabezado Detalle (Embalajes) */}
+          <tr className="bg-slate-200">
+            <td className="border border-black px-2 py-0.5 font-bold text-[10px]">
+              DETALLE (EMBALAJES)
+            </td>
+            <td className="border border-black px-2 py-0.5 font-bold text-[10px] text-center">
+              CANTIDAD
+            </td>
+            <td className="border border-black px-2 py-0.5 bg-white"></td>
+            <td className="border border-black px-2 py-0.5 bg-white"></td>
+          </tr>
+
+          {/* Fila Entrega */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-bold text-[10px] bg-white">
+              ENTREGA :
+            </td>
+            <td className="border border-black px-2 py-1 bg-white"></td>
+            <td className="border border-black px-2 py-1 font-black text-sm text-center bg-white">
+              {data.entregaNum || ''}
+            </td>
+            <td className="border border-black px-2 py-1 bg-white"></td>
+          </tr>
+
+          {/* Fila BANDEJAS */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-black text-xs bg-white">
+              BANDEJAS
+            </td>
+            <td className="border border-black px-2 py-1 font-black text-sm text-center bg-white">
+              {data.bandejas || ''}
+            </td>
+            <td className="border border-black px-2 py-1 bg-white"></td>
+            <td className="border border-black px-2 py-1 bg-white"></td>
+          </tr>
+
+          {/* Fila PALLET MADERA */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-black text-xs bg-white">
+              PALLET MADERA
+            </td>
+            <td className="border border-black px-2 py-1 font-black text-sm text-center bg-white">
+              {data.palletMadera || ''}
+            </td>
+            <td className="border border-black px-2 py-1 bg-white"></td>
+            <td className="border border-black px-2 py-1 bg-white"></td>
+          </tr>
+
+          {/* Fila PALLETS PLASTICOS */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-black text-xs bg-white">
+              PALLETS PLASTICOS
+            </td>
+            <td className="border border-black px-2 py-1 font-black text-sm text-center bg-white">
+              {data.palletPlasticos || ''}
+            </td>
+            <td className="border border-black px-2 py-1 bg-white"></td>
+            <td className="border border-black px-2 py-1 bg-white"></td>
+          </tr>
+
+          {/* Filas vacías de detalle */}
+          <tr>
+            <td className="border border-black px-2 py-2 bg-white min-h-[22px]"></td>
+            <td className="border border-black px-2 py-2 bg-white"></td>
+            <td className="border border-black px-2 py-2 bg-white"></td>
+            <td className="border border-black px-2 py-2 bg-white"></td>
+          </tr>
+          <tr>
+            <td className="border border-black px-2 py-2 bg-white min-h-[22px]"></td>
+            <td className="border border-black px-2 py-2 bg-white"></td>
+            <td className="border border-black px-2 py-2 bg-white"></td>
+            <td className="border border-black px-2 py-2 bg-white"></td>
+          </tr>
+
+          {/* Totales y Gran Cuadro de Número de Viaje / Vuelta */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-black text-xs text-center bg-slate-200">
+              TOTALES
+            </td>
+            <td className="border border-black px-2 py-1 font-black text-sm text-center bg-white">
+              {data.kilos || ''}
+            </td>
+            <td colSpan={2} rowSpan={4} className="border border-black px-2 py-2 text-center align-middle bg-slate-100">
+              <span className="text-[10px] font-bold block text-slate-500 uppercase tracking-widest mb-1">N° Viaje / Vuelta</span>
+              <div className="font-black text-5xl tracking-tight leading-none text-black">
+                {data.vuelta || '1°'}
+              </div>
+            </td>
+          </tr>
+
+          {/* Folios SAP */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-bold text-[10px] bg-white">
+              Folios Sap
+            </td>
+            <td className="border border-black px-2 py-1 font-black text-xs bg-white">
+              {data.foliosSap || ''}
+            </td>
+          </tr>
+
+          {/* Folios Legales */}
+          <tr>
+            <td className="border border-black px-2 py-1 font-bold text-[10px] bg-white">
+              Folios Legales
+            </td>
+            <td className="border border-black px-2 py-1 font-black text-xs bg-white">
+              {data.foliosLegales || ''}
+            </td>
+          </tr>
+
+          {/* Fila extra para anotaciones */}
+          <tr>
+            <td className="border border-black px-2 py-2 bg-white min-h-[20px]"></td>
+            <td className="border border-black px-2 py-2 bg-white"></td>
+          </tr>
+
+          {/* Supervisor de Carga y Jefatura */}
+          <tr>
+            <td colSpan={4} className="border border-black px-3 py-2 bg-white text-[10px] font-bold space-y-1">
+              <div>SUPERVISOR CARGA :</div>
+              <div>JEFE DE DISTRIBUCION Y ENCAJADO: . {data.supervisorName || 'DAGOBERTO VALENZUELA J.'}</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Recibo Conforme */}
+      <div className="mt-4 pt-2 text-[10px] font-bold text-slate-800">
+        RECIBO CONFORME ............................................
+      </div>
+    </div>
+  );
 }
 
 const PERMITTED_OPERATION_TIME_MS = 15 * 60 * 1000; // 15 minutos estándar
@@ -325,10 +611,47 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('Cial2026!');
   const [showNewUserPasswordPlain, setShowNewUserPasswordPlain] = useState(false);
-  const [newUserRole, setNewUserRole] = useState('Operador Inbound');
+  const [newUserRole, setNewUserRole] = useState('Gestor Inbound');
   const [creatingUser, setCreatingUser] = useState(false);
   const [createUserError, setCreateUserError] = useState<string | null>(null);
   const [createUserSuccess, setCreateUserSuccess] = useState<string | null>(null);
+
+  // States para Documento Control de Carga (Planta 2)
+  const [showCargoDocModal, setShowCargoDocModal] = useState(false);
+  const [selectedTruckForCargoDoc, setSelectedTruckForCargoDoc] = useState<YardOperation | null>(null);
+  const [cargoDocData, setCargoDocData] = useState<CargoDocState>({
+    anden: '',
+    fecha: formatChileanDate(),
+    driver: '',
+    rut: '',
+    tractorPlate: '',
+    trailerPlate: '',
+    destino: 'Centro Distrib.- P1',
+    kilos: '',
+    docTransporte: '',
+    sellos: '',
+    entregaNum: '',
+    bandejas: '',
+    palletMadera: '',
+    palletPlasticos: '',
+    vuelta: '1°',
+    foliosSap: '',
+    foliosLegales: '',
+    supervisorName: 'DAGOBERTO VALENZUELA J.'
+  });
+  const [cargoDocSaveMsg, setCargoDocSaveMsg] = useState<string | null>(null);
+
+  // States para campos opcionales directos en Modal Registrar Carga Planta 2
+  const [p2Kilos, setP2Kilos] = useState('');
+  const [p2DocTransporte, setP2DocTransporte] = useState('');
+  const [p2Sellos, setP2Sellos] = useState('');
+  const [p2Entrega, setP2Entrega] = useState('');
+  const [p2Bandejas, setP2Bandejas] = useState('');
+  const [p2PalletMadera, setP2PalletMadera] = useState('');
+  const [p2PalletPlasticos, setP2PalletPlasticos] = useState('');
+  const [p2Vuelta, setP2Vuelta] = useState('1°');
+  const [p2Anden, setP2Anden] = useState('');
+  const [p2ShowExtraCargoFields, setP2ShowExtraCargoFields] = useState(false);
 
   // Campos del modal de ingreso
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
@@ -1553,7 +1876,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   };
 
   // Crear despacho nuevo en Planta 2
-  const handleAddPlanta2Truck = async (e: React.FormEvent) => {
+  const handleAddPlanta2Truck = async (e: React.FormEvent, openCargoDocAfter = false) => {
     e.preventDefault();
     setErrorMsg(null);
 
@@ -1628,9 +1951,46 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
 
       if (error) throw error;
 
-      if (data && data[0]) {
-        setTrucks(prev => [data[0], ...prev]);
+      const createdTruck = data && data[0] ? data[0] : null;
+
+      if (createdTruck) {
+        setTrucks(prev => [createdTruck, ...prev]);
+
+        // Guardar datos extras del Control de Carga si fueron ingresados o si se pidió abrir la hoja
+        const initialDocData: CargoDocState = {
+          anden: p2Anden.trim(),
+          fecha: formatChileanDate(createdTruck.plant_loading_time || createdTruck.entry_time),
+          driver: createdTruck.driver || finalDriverName,
+          rut: createdTruck.rut || finalRut || '',
+          tractorPlate: createdTruck.tractor_plate || finalTractor,
+          trailerPlate: createdTruck.trailer_plate || finalTrailer || '',
+          destino: 'Centro Distrib.- P1',
+          kilos: p2Kilos.trim(),
+          docTransporte: p2DocTransporte.trim(),
+          sellos: p2Sellos.trim(),
+          entregaNum: p2Entrega.trim(),
+          bandejas: p2Bandejas.trim(),
+          palletMadera: p2PalletMadera.trim(),
+          palletPlasticos: p2PalletPlasticos.trim(),
+          vuelta: p2Vuelta || '1°',
+          foliosSap: '',
+          foliosLegales: '',
+          supervisorName: 'DAGOBERTO VALENZUELA J.'
+        };
+
+        try {
+          localStorage.setItem(`nexus_cargo_doc_${createdTruck.id}`, JSON.stringify(initialDocData));
+        } catch (storageErr) {
+          console.error('Error guardando en localStorage:', storageErr);
+        }
+
+        if (openCargoDocAfter) {
+          setCargoDocData(initialDocData);
+          setSelectedTruckForCargoDoc(createdTruck);
+          setShowCargoDocModal(true);
+        }
       }
+
       setShowPlanta2AddModal(false);
       
       // Limpiar modal
@@ -1646,12 +2006,83 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       setIsManualTrailer(false);
       setCargoType('Refrigerado');
       setCustomCargoType('');
+      setP2Kilos('');
+      setP2DocTransporte('');
+      setP2Sellos('');
+      setP2Entrega('');
+      setP2Bandejas('');
+      setP2PalletMadera('');
+      setP2PalletPlasticos('');
+      setP2Vuelta('1°');
+      setP2Anden('');
+      setP2ShowExtraCargoFields(false);
       
       fetchData();
     } catch (err: any) {
       console.error('Error ingresando despacho Planta 2:', err);
       setErrorMsg('No se pudo registrar el despacho en Planta 2: ' + (err.message || ''));
     }
+  };
+
+  // Funciones para Gestión de Documento Oficial "Control de Carga" (Planta 2)
+  const openCargoDocForTruck = (truck: YardOperation) => {
+    setSelectedTruckForCargoDoc(truck);
+    setCargoDocSaveMsg(null);
+
+    // 1. Verificar si existen datos guardados en localStorage
+    const saved = localStorage.getItem(`nexus_cargo_doc_${truck.id}`);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setCargoDocData(parsed);
+        setShowCargoDocModal(true);
+        return;
+      } catch (e) {
+        console.error('Error al recuperar datos guardados de Control de Carga:', e);
+      }
+    }
+
+    // 2. Pre-rellenar con datos de la operación
+    const defaultAnden = truck.dock?.name ? (truck.dock.name.replace(/[^0-9]/g, '') || truck.dock.name) : '';
+    setCargoDocData({
+      anden: defaultAnden,
+      fecha: formatChileanDate(truck.plant_loading_time || truck.entry_time),
+      driver: truck.driver || '',
+      rut: truck.rut || '',
+      tractorPlate: truck.tractor_plate || truck.patent || '',
+      trailerPlate: truck.trailer_plate || '',
+      destino: 'Centro Distrib.- P1',
+      kilos: '',
+      docTransporte: '',
+      sellos: '',
+      entregaNum: '',
+      bandejas: '',
+      palletMadera: '',
+      palletPlasticos: '',
+      vuelta: '1°',
+      foliosSap: '',
+      foliosLegales: '',
+      supervisorName: 'DAGOBERTO VALENZUELA J.'
+    });
+    setShowCargoDocModal(true);
+  };
+
+  const handleSaveCargoDoc = () => {
+    if (!selectedTruckForCargoDoc) return;
+    try {
+      localStorage.setItem(`nexus_cargo_doc_${selectedTruckForCargoDoc.id}`, JSON.stringify(cargoDocData));
+      setCargoDocSaveMsg('¡Datos de Control de Carga guardados correctamente!');
+      setTimeout(() => setCargoDocSaveMsg(null), 3000);
+    } catch (e) {
+      console.error('Error al guardar datos de carga:', e);
+    }
+  };
+
+  const handlePrintCargoDoc = () => {
+    handleSaveCargoDoc();
+    setTimeout(() => {
+      window.print();
+    }, 150);
   };
 
   // Guardar celular del chofer desde el modal de trazabilidad (actualiza ticket y ficha de chofer)
@@ -2422,7 +2853,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 isNexusOwner ? 'text-amber-300' : 'text-emerald-300/80'
               }`}>
                 {isNexusOwner && <Crown className="w-2.5 h-2.5 text-amber-400" />}
-                {isNexusOwner ? 'Administrador' : 'Operador Inbound'}
+                {isNexusOwner ? 'Administrador' : formatUserRole(currentUser?.user_metadata?.role || currentUser?.app_metadata?.role)}
               </span>
             </div>
           </div>
@@ -3482,6 +3913,13 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                             🚀 Despachar (En Ruta a CD)
                           </button>
                           <button
+                            onClick={() => openCargoDocForTruck(truck)}
+                            className="flex items-center justify-center gap-2 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 hover:border-slate-400 text-xs py-2 rounded-xl font-bold w-full transition-all active:scale-98 cursor-pointer shadow-xs"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-cyan-600" />
+                            📄 Control de Carga
+                          </button>
+                          <button
                             onClick={() => setSelectedTruckForTimeline(truck)}
                             className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 hover:text-slate-800 font-bold w-full py-1 cursor-pointer"
                           >
@@ -3582,6 +4020,13 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                             📥 Registrar Llegada a Patio
                           </button>
                           <button
+                            onClick={() => openCargoDocForTruck(truck)}
+                            className="flex items-center justify-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-[11px] py-1.5 rounded-xl font-bold w-full transition-all cursor-pointer shadow-xs"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-blue-600" />
+                            📄 Control de Carga
+                          </button>
+                          <button
                             onClick={() => setSelectedTruckForTimeline(truck)}
                             className="flex items-center justify-center gap-1.5 text-[11px] text-blue-600 hover:text-blue-800 font-bold w-full py-1 cursor-pointer"
                           >
@@ -3665,13 +4110,22 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                           <p className="flex items-center gap-2"><Clock className="w-4 h-4 text-emerald-600" /> <span>Llegada Patio: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span></p>
                         </div>
 
-                        <button
-                          onClick={() => setSelectedTruckForTimeline(truck)}
-                          className="flex items-center justify-center gap-1.5 text-[11px] text-emerald-700 hover:text-emerald-900 font-bold w-full py-1 border-t border-slate-100 pt-2 cursor-pointer"
-                        >
-                          <Activity className="w-3.5 h-3.5" />
-                          Ver Trazabilidad Completa
-                        </button>
+                        <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                          <button
+                            onClick={() => openCargoDocForTruck(truck)}
+                            className="flex items-center justify-center gap-1.5 text-[11px] text-cyan-800 hover:text-cyan-950 font-bold w-full py-1 cursor-pointer bg-cyan-50/60 hover:bg-cyan-100/60 rounded-lg transition-all"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-cyan-700" />
+                            📄 Control de Carga
+                          </button>
+                          <button
+                            onClick={() => setSelectedTruckForTimeline(truck)}
+                            className="flex items-center justify-center gap-1.5 text-[11px] text-emerald-700 hover:text-emerald-900 font-bold w-full py-1 cursor-pointer"
+                          >
+                            <Activity className="w-3.5 h-3.5" />
+                            Ver Trazabilidad Completa
+                          </button>
+                        </div>
                       </div>
                     ))}
                     {filteredTrucks.filter(t => t.origin === 'planta_2' && (t.status === 'espera' || t.status === 'anden')).length === 0 && (
@@ -3745,6 +4199,17 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                               <span>WSP</span>
                             </a>
                           )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openCargoDocForTruck(truck);
+                            }}
+                            title="Ver o reimprimir Control de Carga"
+                            className="p-1 text-slate-400 hover:text-cyan-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -4551,9 +5016,10 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               }).length;
 
               const filteredUsers = adminUsers.filter(u => {
+                const roleName = formatUserRole(u.user_metadata?.role || u.app_metadata?.role || u.role);
                 const matchesSearch = !userSearchQuery.trim() || 
                   u.email.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
-                  u.role.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
+                  roleName.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
                   u.id.toLowerCase().includes(userSearchQuery.toLowerCase());
                 
                 let matchesDomain = true;
@@ -4776,7 +5242,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                                     isOwner ? 'bg-amber-50 text-amber-900 border-amber-200' : 'text-slate-700 bg-slate-100 border-slate-200'
                                   }`}>
                                     {isOwner ? <Crown className="w-3 h-3 text-amber-500" /> : <Shield className="w-3 h-3 text-[#0a5c36]" />}
-                                    {isOwner ? 'Administrador' : (u.user_metadata?.role || u.app_metadata?.role || 'Operador Inbound')}
+                                    {isOwner ? 'Administrador' : formatUserRole(u.user_metadata?.role || u.app_metadata?.role || u.role)}
                                   </span>
                                 </td>
 
@@ -5525,21 +5991,162 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   />
                 )}
               </div>
+
+              {/* Sección Opcional: Datos Control de Carga */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setP2ShowExtraCargoFields(!p2ShowExtraCargoFields)}
+                  className="flex items-center justify-between w-full p-2.5 rounded-xl bg-cyan-50/70 border border-cyan-200 text-cyan-950 font-bold text-xs hover:bg-cyan-100/70 transition-all cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-cyan-700" />
+                    <span>Datos extras Control de Carga (Kilos, Sellos, Embalajes)</span>
+                  </span>
+                  <span className="text-[10px] bg-cyan-200/80 px-2 py-0.5 rounded-md font-black">
+                    {p2ShowExtraCargoFields ? 'Ocultar' : 'Completar ahora'}
+                  </span>
+                </button>
+
+                {p2ShowExtraCargoFields && (
+                  <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-3 animate-fadeIn">
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Kilos</label>
+                        <input
+                          type="text"
+                          placeholder="Ej: 8.000"
+                          value={p2Kilos}
+                          onChange={(e) => setP2Kilos(e.target.value)}
+                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Doc. Transporte</label>
+                        <input
+                          type="text"
+                          placeholder="Ej: 3428711"
+                          value={p2DocTransporte}
+                          onChange={(e) => setP2DocTransporte(e.target.value)}
+                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Sellos</label>
+                        <input
+                          type="text"
+                          placeholder="Ej: 125198"
+                          value={p2Sellos}
+                          onChange={(e) => setP2Sellos(e.target.value)}
+                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">N° Entrega</label>
+                        <input
+                          type="text"
+                          placeholder="Ej: 81479576"
+                          value={p2Entrega}
+                          onChange={(e) => setP2Entrega(e.target.value)}
+                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Detalle Embalajes (Cantidades)</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-600 block mb-0.5">Bandejas</span>
+                          <input
+                            type="text"
+                            placeholder="260"
+                            value={p2Bandejas}
+                            onChange={(e) => setP2Bandejas(e.target.value)}
+                            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-600 block mb-0.5">Pallet Madera</span>
+                          <input
+                            type="text"
+                            placeholder="0"
+                            value={p2PalletMadera}
+                            onChange={(e) => setP2PalletMadera(e.target.value)}
+                            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-600 block mb-0.5">Pallet Plásticos</span>
+                          <input
+                            type="text"
+                            placeholder="25"
+                            value={p2PalletPlasticos}
+                            onChange={(e) => setP2PalletPlasticos(e.target.value)}
+                            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">N° de Viaje / Vuelta</label>
+                        <div className="flex gap-1">
+                          {['1°', '2°', '3°', '4°'].map(v => (
+                            <button
+                              key={v}
+                              type="button"
+                              onClick={() => setP2Vuelta(v)}
+                              className={`flex-1 py-1 rounded-lg text-xs font-black border transition-all cursor-pointer ${
+                                p2Vuelta === v ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-white text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {v}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Andén (Opcional)</label>
+                        <input
+                          type="text"
+                          placeholder="Ej: 10"
+                          value={p2Anden}
+                          onChange={(e) => setP2Anden(e.target.value)}
+                          className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="pt-4 flex gap-3 border-t border-slate-100">
+            <div className="pt-4 flex flex-col sm:flex-row gap-2.5 border-t border-slate-100">
               <button 
                 type="button"
                 onClick={() => setShowPlanta2AddModal(false)}
-                className="bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-bold flex-1 transition-colors hover:bg-slate-100 cursor-pointer"
+                className="bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-bold transition-colors hover:bg-slate-100 cursor-pointer order-last sm:order-first"
               >
                 Cancelar
               </button>
               <button 
                 type="submit"
+                onClick={(e) => handleAddPlanta2Truck(e, false)}
+                className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-sm"
+              >
+                🏭 Registrar Carga
+              </button>
+              <button 
+                type="button"
+                onClick={(e) => handleAddPlanta2Truck(e, true)}
                 className="bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-4 py-2.5 rounded-xl text-xs font-black flex-1 transition-all cursor-pointer shadow-md shadow-cyan-600/20"
               >
-                🏭 Registrar Carga Planta 2
+                📄 Registrar y Abrir Control de Carga
               </button>
             </div>
           </form>
@@ -5860,7 +6467,22 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               </div>
             </div>
 
-            <div className="pt-2 flex justify-end">
+            <div className="pt-2 flex items-center justify-between">
+              {selectedTruckForTimeline.origin === 'planta_2' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const truck = selectedTruckForTimeline;
+                    setSelectedTruckForTimeline(null);
+                    openCargoDocForTruck(truck);
+                  }}
+                  className="flex items-center gap-2 bg-cyan-50 hover:bg-cyan-100 text-cyan-900 border border-cyan-300 px-4 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                >
+                  <FileText className="w-4 h-4 text-cyan-700" />
+                  <span>📄 Ver / Imprimir Control de Carga</span>
+                </button>
+              ) : <div />}
+
               <button
                 onClick={() => {
                   setSelectedTruckForTimeline(null);
@@ -6698,8 +7320,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   onChange={(e) => setNewUserRole(e.target.value)}
                   className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm w-full font-bold text-slate-800 focus:outline-none focus:border-[#0a5c36] focus:bg-white cursor-pointer"
                 >
-                  <option value="Operador Inbound">Operador Inbound</option>
-                  <option value="Operador Planta 2">Operador Planta 2</option>
+                  <option value="Gestor Inbound">Gestor Inbound</option>
+                  <option value="Gestor Planta 2">Gestor Planta 2</option>
                   <option value="Supervisor CD">Supervisor CD</option>
                   <option value="Administrador">Administrador</option>
                 </select>
@@ -6723,6 +7345,381 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Modal Oficial de Control de Carga (Planta 2 a Planta 1) */}
+      {showCargoDocModal && selectedTruckForCargoDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
+          <div 
+            className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+            onClick={() => setShowCargoDocModal(false)}
+          />
+
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-6xl max-h-[92vh] flex flex-col relative z-10 shadow-2xl overflow-hidden animate-fadeIn text-slate-800">
+            {/* Encabezado del Modal */}
+            <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-cyan-600 text-white flex items-center justify-center shadow-md shadow-cyan-600/20 shrink-0">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-black text-lg text-slate-900 leading-tight">Control de Carga Oficial</h3>
+                    <span className="bg-cyan-100 text-cyan-800 text-[10px] font-black uppercase px-2 py-0.5 rounded-full border border-cyan-200">
+                      Planta 2 ➔ Planta 1
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 font-semibold mt-0.5">
+                    Camión: {selectedTruckForCargoDoc.tractor_plate || selectedTruckForCargoDoc.patent || 'S/P'} • Conductor: {selectedTruckForCargoDoc.driver}
+                  </p>
+                </div>
+              </div>
+
+              {/* Botones de Acción */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveCargoDoc}
+                  className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border border-slate-300"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Guardar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintCargoDoc}
+                  className="flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md shadow-cyan-600/25 active:scale-95"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>🖨️ Imprimir Hoja</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCargoDocModal(false)}
+                  className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                  title="Cerrar ventana"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Mensaje de confirmación al guardar */}
+            {cargoDocSaveMsg && (
+              <div className="bg-emerald-50 border-b border-emerald-200 px-6 py-2 text-xs font-bold text-emerald-800 flex items-center gap-2 animate-fadeIn">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{cargoDocSaveMsg}</span>
+              </div>
+            )}
+
+            {/* Contenido en 2 columnas: Formulario a la izquierda y Vista Previa a la derecha */}
+            <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200">
+              
+              {/* Columna Izquierda: Formulario de Edición */}
+              <div className="lg:col-span-5 p-6 space-y-4 overflow-y-auto max-h-[78vh]">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <h4 className="font-extrabold text-xs uppercase tracking-wider text-slate-500">Datos del Documento</h4>
+                  <span className="text-[11px] font-bold text-cyan-700">Edición en tiempo real</span>
+                </div>
+
+                {/* 1. Destino y Ruta */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Destino</label>
+                  <input
+                    type="text"
+                    value={cargoDocData.destino}
+                    onChange={(e) => setCargoDocData(prev => ({ ...prev, destino: e.target.value }))}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 focus:bg-white"
+                  />
+                  <div className="flex gap-1.5 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCargoDocData(prev => ({ ...prev, destino: 'Centro Distrib.- P1' }))}
+                      className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded font-bold cursor-pointer transition-colors"
+                    >
+                      Centro Distrib.- P1
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCargoDocData(prev => ({ ...prev, destino: 'PLANTA 1 NCD' }))}
+                      className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded font-bold cursor-pointer transition-colors"
+                    >
+                      PLANTA 1 NCD
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Andén y Fecha */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Andén</label>
+                    <input
+                      type="text"
+                      placeholder="Ej: 10"
+                      value={cargoDocData.anden}
+                      onChange={(e) => setCargoDocData(prev => ({ ...prev, anden: e.target.value }))}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 focus:bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Fecha (DD-MM-YYYY)</label>
+                    <input
+                      type="text"
+                      value={cargoDocData.fecha}
+                      onChange={(e) => setCargoDocData(prev => ({ ...prev, fecha: e.target.value }))}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 focus:bg-white text-center"
+                    />
+                  </div>
+                </div>
+
+                {/* 3. Conductor y RUT */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Conductor</label>
+                    <input
+                      type="text"
+                      value={cargoDocData.driver}
+                      onChange={(e) => setCargoDocData(prev => ({ ...prev, driver: e.target.value }))}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 focus:bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">RUT Conductor</label>
+                    <input
+                      type="text"
+                      value={cargoDocData.rut}
+                      onChange={(e) => setCargoDocData(prev => ({ ...prev, rut: e.target.value }))}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 focus:bg-white"
+                    />
+                  </div>
+                </div>
+
+                {/* 4. Patentes */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Patente Tracto</label>
+                    <input
+                      type="text"
+                      value={cargoDocData.tractorPlate}
+                      onChange={(e) => setCargoDocData(prev => ({ ...prev, tractorPlate: e.target.value.toUpperCase() }))}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs w-full font-black font-mono text-slate-800 focus:outline-none focus:border-cyan-600 focus:bg-white text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Patente Rampla</label>
+                    <input
+                      type="text"
+                      value={cargoDocData.trailerPlate}
+                      onChange={(e) => setCargoDocData(prev => ({ ...prev, trailerPlate: e.target.value.toUpperCase() }))}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs w-full font-black font-mono text-slate-800 focus:outline-none focus:border-cyan-600 focus:bg-white text-center"
+                    />
+                  </div>
+                </div>
+
+                {/* 5. Kilos, Doc. Transporte, Sellos */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                  <span className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                    Despacho & Pesaje
+                  </span>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Kilos</label>
+                      <input
+                        type="text"
+                        placeholder="8.000"
+                        value={cargoDocData.kilos}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, kilos: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Doc. Transporte</label>
+                      <input
+                        type="text"
+                        placeholder="3428711"
+                        value={cargoDocData.docTransporte}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, docTransporte: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Sellos</label>
+                      <input
+                        type="text"
+                        placeholder="125198"
+                        value={cargoDocData.sellos}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, sellos: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">N° de Entrega</label>
+                    <input
+                      type="text"
+                      placeholder="81479576"
+                      value={cargoDocData.entregaNum}
+                      onChange={(e) => setCargoDocData(prev => ({ ...prev, entregaNum: e.target.value }))}
+                      className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                    />
+                  </div>
+                </div>
+
+                {/* 6. Detalles de Embalajes */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                  <span className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                    Detalle de Embalajes
+                  </span>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Bandejas</label>
+                      <input
+                        type="text"
+                        placeholder="260"
+                        value={cargoDocData.bandejas}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, bandejas: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Pallet Madera</label>
+                      <input
+                        type="text"
+                        placeholder="0"
+                        value={cargoDocData.palletMadera}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, palletMadera: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Pallets Plásticos</label>
+                      <input
+                        type="text"
+                        placeholder="25"
+                        value={cargoDocData.palletPlasticos}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, palletPlasticos: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600 text-center"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 7. Vueltas, Folios SAP y Supervisor */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">N° de Viaje / Vuelta</label>
+                    <div className="flex gap-1.5">
+                      {['1°', '2°', '3°', '4°', '5°'].map(v => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setCargoDocData(prev => ({ ...prev, vuelta: v }))}
+                          className={`flex-1 py-1.5 rounded-xl text-xs font-black border transition-all cursor-pointer ${
+                            cargoDocData.vuelta === v 
+                              ? 'bg-cyan-600 text-white border-cyan-600 shadow-sm' 
+                              : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                          }`}
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Folios SAP</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: 601874638"
+                        value={cargoDocData.foliosSap}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, foliosSap: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Folios Legales</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: 848762"
+                        value={cargoDocData.foliosLegales}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, foliosLegales: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Supervisor de Carga</label>
+                    <input
+                      type="text"
+                      value={cargoDocData.supervisorName}
+                      onChange={(e) => setCargoDocData(prev => ({ ...prev, supervisorName: e.target.value }))}
+                      className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs w-full font-bold text-slate-800 focus:outline-none focus:border-cyan-600"
+                    />
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Columna Derecha: Vista Previa Real de la Hoja de Impresión */}
+              <div className="lg:col-span-7 p-6 bg-slate-200/70 flex flex-col items-center justify-start overflow-y-auto max-h-[78vh]">
+                <div className="w-full flex items-center justify-between pb-3 text-xs font-bold text-slate-600">
+                  <span className="flex items-center gap-1.5">
+                    <Printer className="w-4 h-4 text-cyan-600" />
+                    Vista previa exacta para imprimir (Formato Carta)
+                  </span>
+                  <span className="text-[10px] bg-white border border-slate-300 px-2 py-0.5 rounded text-slate-500 font-mono">
+                    1 Hoja
+                  </span>
+                </div>
+
+                {/* Hoja Blanca con diseño exacto del documento */}
+                <div className="bg-white border border-slate-300 shadow-xl p-8 rounded-xl w-full max-w-[620px] transition-all">
+                  <ControlDeCargaDocument data={cargoDocData} />
+                </div>
+              </div>
+
+            </div>
+
+            {/* Footer del Modal */}
+            <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowCargoDocModal(false)}
+                className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Cerrar
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveCargoDoc}
+                  className="bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                >
+                  💾 Guardar Datos
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintCargoDoc}
+                  className="bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 text-white px-5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md shadow-cyan-600/25 active:scale-95 flex items-center gap-2"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>🖨️ Imprimir Hoja Oficial</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Contenedor Exclusivo de Impresión (activado por @media print) */}
+      {showCargoDocModal && (
+        <div id="printable-cargo-doc" className="hidden print:block">
+          <ControlDeCargaDocument data={cargoDocData} />
         </div>
       )}
     </div>
