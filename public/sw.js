@@ -55,9 +55,11 @@ self.addEventListener('push', (event) => {
     body: data.body,
     icon: data.icon || '/icon-192.png',
     badge: data.badge || '/badge-72.png',
-    vibrate: data.vibrate || [200, 100, 200],
+    vibrate: data.vibrate || [500, 200, 500, 200, 500],
     tag: data.tag || 'nexus-dock-notification',
     renotify: true,
+    silent: false,
+    requireInteraction: true,
     data: data.url || '/'
   };
 
@@ -73,6 +75,9 @@ self.addEventListener('message', (event) => {
     self.registration.showNotification(title, {
       icon: '/icon-192.png',
       badge: '/badge-72.png',
+      silent: false,
+      requireInteraction: true,
+      vibrate: [500, 200, 500, 200, 500],
       ...options
     });
   }

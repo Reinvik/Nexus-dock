@@ -69,10 +69,33 @@ export const setSoundEnabled = (enabled: boolean) => {
   localStorage.setItem(STORAGE_KEY_SOUND_ENABLED, enabled ? 'true' : 'false');
 };
 
-// Generador de audio sin dependencias con Web Audio API (alta fidelidad, ultra rápido y offline)
+// Reproductor de archivos de audio reales (WAV de alta compatibilidad con pantalla bloqueada)
 export const playNotificationSound = (type: NotificationType) => {
   if (!isSoundEnabled() || typeof window === 'undefined') return;
 
+  const soundPath = type === 'arrival' 
+    ? '/arrival.wav' 
+    : type === 'assignment' 
+      ? '/assignment.wav' 
+      : '/alert.wav';
+
+  try {
+    const audio = new Audio(soundPath);
+    audio.volume = 1.0;
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((err) => {
+        console.warn('[Audio] Error al reproducir archivo WAV, probando sintetizador:', err);
+        playSynthesizedChime(type);
+      });
+    }
+  } catch (e) {
+    playSynthesizedChime(type);
+  }
+};
+
+// Generador de audio sintetizado con Web Audio API (fallback)
+export const playSynthesizedChime = (type: NotificationType) => {
   try {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextClass) return;
@@ -83,7 +106,6 @@ export const playNotificationSound = (type: NotificationType) => {
     const now = ctx.currentTime;
 
     if (type === 'arrival') {
-      // Chime melódico ascendente logístico (Llegada a Patio)
       const freqs = [523.25, 659.25, 783.99]; // C5, E5, G5
       freqs.forEach((freq, idx) => {
         const osc = ctx.createOscillator();
@@ -91,7 +113,7 @@ export const playNotificationSound = (type: NotificationType) => {
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, now + idx * 0.11);
         gain.gain.setValueAtTime(0, now + idx * 0.11);
-        gain.gain.linearRampToValueAtTime(0.28, now + idx * 0.11 + 0.02);
+        gain.gain.linearRampToValueAtTime(0.3, now + idx * 0.11 + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.11 + 0.32);
         osc.connect(gain);
         gain.connect(ctx.destination);
@@ -99,7 +121,6 @@ export const playNotificationSound = (type: NotificationType) => {
         osc.stop(now + idx * 0.11 + 0.33);
       });
     } else if (type === 'assignment') {
-      // Chime suave de andén (Asignación de Andén)
       const freqs = [440, 554.37, 659.25]; // A4, C#5, E5
       freqs.forEach((freq, idx) => {
         const osc = ctx.createOscillator();
@@ -115,14 +136,13 @@ export const playNotificationSound = (type: NotificationType) => {
         osc.stop(now + idx * 0.10 + 0.31);
       });
     } else {
-      // Pulso doble de advertencia (Alerta de Demora)
       [0, 0.20].forEach((offset) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(880, now + offset);
         osc.frequency.exponentialRampToValueAtTime(440, now + offset + 0.16);
-        gain.gain.setValueAtTime(0.26, now + offset);
+        gain.gain.setValueAtTime(0.28, now + offset);
         gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.16);
         osc.connect(gain);
         gain.connect(ctx.destination);
@@ -131,20 +151,20 @@ export const playNotificationSound = (type: NotificationType) => {
       });
     }
   } catch (e) {
-    console.warn('[Audio] Error al reproducir chime acústico:', e);
+    console.warn('[Audio] Error al reproducir chime acústico sintetizado:', e);
   }
 };
 
-// Vibración háptica en celulares
+// Vibración háptica en celulares (patrón contundente para bolsillo)
 export const triggerVibration = (type: NotificationType) => {
   if (typeof window !== 'undefined' && 'vibrate' in navigator) {
     try {
       if (type === 'alert') {
-        navigator.vibrate([300, 100, 300, 100, 300]);
+        navigator.vibrate([500, 200, 500, 200, 500]);
       } else if (type === 'assignment') {
-        navigator.vibrate([200, 80, 200]);
+        navigator.vibrate([400, 150, 400]);
       } else {
-        navigator.vibrate([180, 70, 180]);
+        navigator.vibrate([400, 150, 400]);
       }
     } catch (e) {
       console.warn('[Vibration] No soportada o bloqueada por política de energía:', e);
@@ -177,14 +197,13 @@ export const sendMobileNotification = async ({
   }
   recentNotifications.set(dedupKey, now);
 
-  // Limpiar llaves antiguas si el mapa crece
   if (recentNotifications.size > 50) {
     for (const [k, v] of recentNotifications.entries()) {
       if (now - v > 15000) recentNotifications.delete(k);
     }
   }
 
-  // 1. Siempre reproducir sonido y vibración local
+  // 1. Siempre reproducir sonido y vibración
   playNotificationSound(type);
   triggerVibration(type);
 
@@ -202,13 +221,15 @@ export const sendMobileNotification = async ({
     icon: '/icon-192.png',
     badge: '/badge-72.png',
     tag: tag || `nexus-dock-${Date.now()}`,
-    vibrate: type === 'alert' ? [300, 100, 300, 100, 300] : [200, 80, 200],
+    vibrate: type === 'alert' ? [500, 200, 500, 200, 500] : [400, 150, 400],
     renotify: true,
+    silent: false, // Forzar a Android a no enviar la notificación en modo silencioso
+    requireInteraction: true, // Mantener en pantalla de bloqueo
     data: { url: window.location.origin }
   };
 
   try {
-    // Intentar a través de Service Worker (clave para que funcione con pantalla bloqueada / móvil)
+    // Intentar a través de Service Worker (clave para pantalla bloqueada)
     if ('serviceWorker' in navigator) {
       const registration = await navigator.serviceWorker.getRegistration();
       if (registration && 'showNotification' in registration) {
@@ -217,9 +238,102 @@ export const sendMobileNotification = async ({
       }
     }
 
-    // Fallback a Notification API estándar de navegador
+    // Fallback a Notification API estándar
     new Notification(title, notificationOptions);
   } catch (err) {
     console.warn('[Notification] Falló el despacho de la notificación:', err);
+  }
+};
+
+// ============================================================================
+// MODO GUARDIA / PATIO ACTIVO (Mantiene viva la conexión WebSocket con pantalla bloqueada)
+// ============================================================================
+let keepAliveAudioElement: HTMLAudioElement | null = null;
+let wakeLockInstance: any = null;
+
+const STORAGE_KEY_PATIO_MODE = 'nexus_dock_patio_mode';
+
+export const isBackgroundPatioModeActive = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(STORAGE_KEY_PATIO_MODE) === 'true';
+};
+
+export const startBackgroundPatioMode = async (): Promise<boolean> => {
+  if (typeof window === 'undefined') return false;
+
+  try {
+    // 1. Iniciar loop de audio silencioso keep-alive
+    if (!keepAliveAudioElement) {
+      keepAliveAudioElement = new Audio('/keepalive.wav');
+      keepAliveAudioElement.loop = true;
+      keepAliveAudioElement.volume = 0.05; // Bajo nivel para evitar saturación
+    }
+
+    await keepAliveAudioElement.play();
+
+    // 2. Registrar sesión multimedia (indica al sistema operativo que la app está en servicio activo)
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: 'Nexus Dock | Guardia Activo',
+        artist: 'Monitoreo de Patio en Vivo',
+        album: 'Patio Inbound CiAL',
+        artwork: [
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }
+        ]
+      });
+      navigator.mediaSession.playbackState = 'playing';
+    }
+
+    // 3. Solicitar WakeLock si está disponible
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLockInstance = await (navigator as any).wakeLock.request('screen');
+        wakeLockInstance.addEventListener('release', () => {
+          wakeLockInstance = null;
+        });
+      } catch (wlErr) {
+        console.warn('[WakeLock] No concedido:', wlErr);
+      }
+    }
+
+    localStorage.setItem(STORAGE_KEY_PATIO_MODE, 'true');
+    return true;
+  } catch (err) {
+    console.error('[PatioMode] Error al activar modo segundo plano:', err);
+    return false;
+  }
+};
+
+export const stopBackgroundPatioMode = () => {
+  if (typeof window === 'undefined') return;
+
+  try {
+    if (keepAliveAudioElement) {
+      keepAliveAudioElement.pause();
+      keepAliveAudioElement.currentTime = 0;
+    }
+
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'paused';
+    }
+
+    if (wakeLockInstance) {
+      wakeLockInstance.release();
+      wakeLockInstance = null;
+    }
+
+    localStorage.setItem(STORAGE_KEY_PATIO_MODE, 'false');
+  } catch (err) {
+    console.error('[PatioMode] Error al desactivar:', err);
+  }
+};
+
+export const toggleBackgroundPatioMode = async (): Promise<boolean> => {
+  if (isBackgroundPatioModeActive()) {
+    stopBackgroundPatioMode();
+    return false;
+  } else {
+    return await startBackgroundPatioMode();
   }
 };

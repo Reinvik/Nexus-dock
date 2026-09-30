@@ -67,7 +67,9 @@ import {
   isSoundEnabled,
   setSoundEnabled,
   sendMobileNotification,
-  playNotificationSound
+  playNotificationSound,
+  isBackgroundPatioModeActive,
+  toggleBackgroundPatioMode
 } from './utils/notifications';
 
 export const OWNER_EMAILS = ['ariel.mella@cial.cl'];
@@ -611,6 +613,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => getNotificationPermissionState());
   const [notificationsActive, setNotificationsActive] = useState<boolean>(() => areNotificationsEnabled());
   const [soundActive, setSoundActive] = useState<boolean>(() => isSoundEnabled());
+  const [patioModeActive, setPatioModeActive] = useState<boolean>(() => isBackgroundPatioModeActive());
+  const [showPhoneConfigGuide, setShowPhoneConfigGuide] = useState<boolean>(false);
   const [showNotificationModal, setShowNotificationModal] = useState<boolean>(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const alertedOvertimeIds = useRef<Set<string>>(new Set());
@@ -3053,6 +3057,19 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     }
   };
 
+  const handleTogglePatioMode = async () => {
+    const active = await toggleBackgroundPatioMode();
+    setPatioModeActive(active);
+    if (active) {
+      sendMobileNotification({
+        title: '📻 Modo Guardia Activo',
+        body: 'Nexus Dock permanecerá despierto y sonará en tu bolsillo incluso con la pantalla bloqueada.',
+        type: 'arrival',
+        tag: 'patio-mode-active'
+      });
+    }
+  };
+
   // Disparadores de Prueba en Celular
   const handleTestArrival = () => {
     sendMobileNotification({
@@ -3350,19 +3367,29 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             <button 
               type="button"
               onClick={() => setShowNotificationModal(true)}
-              title={notificationsActive ? "Notificaciones Activas - Clic para probar o configurar" : "Activar Notificaciones en Celular"}
+              title={
+                patioModeActive
+                  ? "Modo Guardia Activo (Alerta con pantalla bloqueada activada)"
+                  : notificationsActive 
+                    ? "Notificaciones Activas - Clic para probar o configurar" 
+                    : "Activar Notificaciones en Celular"
+              }
               className={`relative p-2 rounded-xl border transition-all cursor-pointer active:scale-95 shadow-sm flex items-center justify-center shrink-0 ${
-                notificationsActive 
-                  ? 'border-emerald-300 bg-emerald-50 text-[#0a5c36]' 
-                  : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-500'
+                patioModeActive
+                  ? 'border-emerald-500 bg-emerald-100 text-[#0a5c36] ring-2 ring-emerald-500/30'
+                  : notificationsActive 
+                    ? 'border-emerald-300 bg-emerald-50 text-[#0a5c36]' 
+                    : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-500'
               }`}
             >
-              {notificationsActive ? (
+              {patioModeActive ? (
+                <Radio className="w-3.5 h-3.5 text-emerald-700 animate-pulse" />
+              ) : notificationsActive ? (
                 <BellRing className="w-3.5 h-3.5 text-emerald-600" />
               ) : (
                 <BellOff className="w-3.5 h-3.5 text-slate-400" />
               )}
-              {notificationsActive && (
+              {(patioModeActive || notificationsActive) && (
                 <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
               )}
             </button>
@@ -8111,6 +8138,51 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 )}
               </div>
 
+              {/* Modo Guardia en Patio (Keep-Alive con pantalla bloqueada) */}
+              <div className={`p-4 rounded-2xl border transition-all ${
+                patioModeActive 
+                  ? 'bg-emerald-950/5 border-emerald-500/40 ring-1 ring-emerald-500/30' 
+                  : 'bg-slate-50 border-slate-200'
+              }`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                      patioModeActive ? 'bg-[#0a5c36] text-white shadow-sm' : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      <Radio className={`w-4 h-4 ${patioModeActive ? 'animate-pulse text-emerald-300' : ''}`} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-slate-850">Modo Guardia en Patio</span>
+                        {patioModeActive && (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping" />
+                            Activo
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-500 leading-tight mt-0.5">
+                        {patioModeActive 
+                          ? 'Alerta sonora y vibración habilitadas con pantalla apagada en el bolsillo.' 
+                          : 'Evita que el celular congele la conexión al apagar la pantalla.'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleTogglePatioMode}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                      patioModeActive
+                        ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                        : 'bg-slate-800 hover:bg-slate-900 text-white'
+                    }`}
+                  >
+                    {patioModeActive ? 'Desactivar' : 'Activar Modo'}
+                  </button>
+                </div>
+              </div>
+
               {/* Ajuste de Sonido y Vibración */}
               <div className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-200 bg-white">
                 <div className="flex items-center gap-2.5">
@@ -8120,7 +8192,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   <div>
                     <div className="text-xs font-bold text-slate-800">Sonido y Chimes Acústicos</div>
                     <div className="text-[10px] text-slate-500 font-medium">
-                      {soundActive ? 'Reproduce tono melódico + vibración háptica' : 'Silencioso (solo visual)'}
+                      {soundActive ? 'Reproduce tono WAV en altavoz + vibración' : 'Silencioso (solo visual)'}
                     </div>
                   </div>
                 </div>
@@ -8195,6 +8267,52 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                     </span>
                   </button>
                 </div>
+              </div>
+
+              {/* Guía Desplegable de Configuración de Celular */}
+              <div className="pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowPhoneConfigGuide(prev => !prev)}
+                  className="w-full flex items-center justify-between p-3 rounded-2xl bg-amber-50/80 border border-amber-200 hover:bg-amber-100/70 text-left transition-all cursor-pointer text-amber-950 font-bold text-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">⚙️</span>
+                    <span>¿Por qué no suena con la pantalla apagada? (Solución)</span>
+                  </div>
+                  <ChevronDown className={`w-4 h-4 text-amber-800 transition-transform ${showPhoneConfigGuide ? 'rotate-180' : ''}`} />
+                </button>
+
+                {showPhoneConfigGuide && (
+                  <div className="mt-2 p-3.5 rounded-2xl bg-white border border-amber-200 text-slate-700 text-[11px] space-y-2.5 animate-in fade-in duration-150">
+                    <div className="font-bold text-amber-950 flex items-center gap-1.5">
+                      📱 Ajustes obligatorios de Android y iPhone:
+                    </div>
+                    
+                    <div className="space-y-1">
+                      <strong className="text-slate-900 block">1. Activar "Modo Guardia en Patio" arriba:</strong>
+                      <p className="text-slate-600">
+                        Al apagar la pantalla, los teléfonos congelan el navegador para ahorrar batería. Al encender el <strong>Modo Guardia</strong>, el sistema mantiene la conexión activa en segundo plano.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <strong className="text-slate-900 block">2. En Android (Samsung, Xiaomi, Motorola):</strong>
+                      <ul className="list-disc pl-4 space-y-0.5 text-slate-600">
+                        <li>Mantén presionado el ícono de <strong>Nexus Dock</strong> en la pantalla -&gt; Toca el botón <strong>(i)</strong> de Información.</li>
+                        <li>Entra a <strong>Notificaciones</strong> -&gt; Categorías -&gt; Asegúrate de que esté en <strong>«Alerta / Con sonido y vibración»</strong> (no en Silencioso).</li>
+                        <li>Entra a <strong>Batería</strong> -&gt; Selecciona <strong>«Sin restricciones»</strong>.</li>
+                      </ul>
+                    </div>
+
+                    <div className="space-y-1">
+                      <strong className="text-slate-900 block">3. Verificar volumen de Notificaciones:</strong>
+                      <p className="text-slate-600">
+                        Asegúrate de que el teléfono no esté en modo <em>«No molestar»</em> o con el volumen de notificaciones en cero.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Botón de Instalación PWA */}
