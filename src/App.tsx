@@ -2441,7 +2441,6 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
           ...t, 
           status: 'espera' as const,
           entry_time: nowISO,
-          yard_arrival_time: nowISO,
           dispatch_time: t.dispatch_time || (t.origin === 'planta_2' ? nowISO : null)
         };
       }
@@ -2464,11 +2463,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         status: 'espera',
         entry_time: nowISO
       };
-      if (truck?.origin === 'planta_2') {
-        updatePayload.yard_arrival_time = nowISO;
-        if (!truck.dispatch_time) {
-          updatePayload.dispatch_time = nowISO;
-        }
+      if (truck?.origin === 'planta_2' && !truck.dispatch_time) {
+        updatePayload.dispatch_time = nowISO;
       }
 
       const { error } = await supabase
@@ -2480,7 +2476,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       fetchData(false);
     } catch (err: any) {
       console.error('Error al registrar entrada a patio:', err);
-      setErrorMsg('Error al registrar el ingreso físico del camión al patio.');
+      setErrorMsg('Error al registrar el ingreso físico del camión al patio: ' + (err.message || ''));
       fetchData(false);
     }
   };
@@ -2643,17 +2639,17 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     // Regresar hacia atrás si arrastran en sentido contrario
     if (
       (sourceStatus === 'espera' && targetStatus === 'cita') ||
-      (sourceStatus === 'anden' && targetStatus === 'espera') ||
-      (sourceStatus === 'completado' && (targetStatus === 'anden' || targetStatus === 'espera'))
+      (sourceStatus === 'anden' && (targetStatus === 'espera' || targetStatus === 'cita')) ||
+      (sourceStatus === 'completado' && (targetStatus === 'anden' || targetStatus === 'espera' || targetStatus === 'cita'))
     ) {
       handleRevertStatus(truck);
       return;
     }
 
     // Avanzar hacia adelante
-    if ((sourceStatus === 'cita' || sourceStatus === 'en_ruta') && targetStatus === 'espera') {
+    if ((sourceStatus === 'cita' || sourceStatus === 'en_ruta' || sourceStatus === 'planta_carga') && targetStatus === 'espera') {
       handleMoveToYard(truckId);
-    } else if (sourceStatus === 'espera' && targetStatus === 'anden') {
+    } else if ((sourceStatus === 'espera' || sourceStatus === 'cita' || sourceStatus === 'en_ruta' || sourceStatus === 'planta_carga') && targetStatus === 'anden') {
       setDraggedTruckForDock(truck);
       const availableDocks = docks.filter(d => d.status === 'Disponible');
       if (availableDocks.length === 0) {
@@ -2662,7 +2658,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       }
       setSelectedDockIdForDrag(availableDocks[0].id);
       setShowDockSelectModal(true);
-    } else if (sourceStatus === 'anden' && targetStatus === 'completado') {
+    } else if ((sourceStatus === 'anden' || sourceStatus === 'espera') && targetStatus === 'completado') {
       handleFinishOperation(truckId, truck.dock_id);
     }
   };
