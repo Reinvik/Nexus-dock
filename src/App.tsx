@@ -618,6 +618,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [showNotificationModal, setShowNotificationModal] = useState<boolean>(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const alertedOvertimeIds = useRef<Set<string>>(new Set());
+  const initialOvertimeRecorded = useRef(false);
   const trucksRef = useRef<YardOperation[]>([]);
   trucksRef.current = trucks;
   const docksRef = useRef<Dock[]>([]);
@@ -989,6 +990,26 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     if (trucks.length === 0) return;
     const nowMs = Date.now();
     const andenedTrucks = trucks.filter(t => t.status === 'anden' && t.start_time);
+
+    // En la primera carga de datos, registrar los camiones que YA estaban con demora
+    // para no disparar ráfagas de alarmas, sonido y vibraciones instantáneas apenas abre la app
+    if (!initialOvertimeRecorded.current) {
+      andenedTrucks.forEach(truck => {
+        const startTime = new Date(truck.start_time!).getTime();
+        let durationMs = PERMITTED_OPERATION_TIME_MS;
+        if (truck.scheduled_entry_time && truck.scheduled_end_time) {
+          const schStart = new Date(truck.scheduled_entry_time).getTime();
+          const schEnd = new Date(truck.scheduled_end_time).getTime();
+          const diff = schEnd - schStart;
+          if (diff > 0) durationMs = diff;
+        }
+        if (startTime + durationMs - nowMs < 0) {
+          alertedOvertimeIds.current.add(truck.id);
+        }
+      });
+      initialOvertimeRecorded.current = true;
+      return;
+    }
 
     andenedTrucks.forEach(truck => {
       const startTime = new Date(truck.start_time!).getTime();

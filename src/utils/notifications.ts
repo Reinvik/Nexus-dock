@@ -69,9 +69,52 @@ export const setSoundEnabled = (enabled: boolean) => {
   localStorage.setItem(STORAGE_KEY_SOUND_ENABLED, enabled ? 'true' : 'false');
 };
 
+// Estado del contexto de audio compartido y desbloqueo por interacción del usuario
+let sharedAudioContext: AudioContext | null = null;
+let isAudioUnlocked = false;
+
+export const unlockAudio = () => {
+  if (isAudioUnlocked || typeof window === 'undefined') return;
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContextClass) {
+      if (!sharedAudioContext) {
+        sharedAudioContext = new AudioContextClass();
+      }
+      if (sharedAudioContext.state === 'suspended') {
+        sharedAudioContext.resume().then(() => {
+          isAudioUnlocked = true;
+        }).catch(() => {});
+      } else {
+        isAudioUnlocked = true;
+      }
+    }
+  } catch {
+    // Silencioso
+  }
+};
+
+// Escuchar el primer gesto del usuario para desbloquear el audio y vibración en móviles
+if (typeof window !== 'undefined') {
+  const onFirstInteraction = () => {
+    unlockAudio();
+    window.removeEventListener('click', onFirstInteraction);
+    window.removeEventListener('touchstart', onFirstInteraction);
+    window.removeEventListener('keydown', onFirstInteraction);
+  };
+  window.addEventListener('click', onFirstInteraction, { capture: true, passive: true });
+  window.addEventListener('touchstart', onFirstInteraction, { capture: true, passive: true });
+  window.addEventListener('keydown', onFirstInteraction, { capture: true, passive: true });
+}
+
 // Reproductor de archivos de audio reales (WAV de alta compatibilidad con pantalla bloqueada)
 export const playNotificationSound = (type: NotificationType) => {
   if (!isSoundEnabled() || typeof window === 'undefined') return;
+
+  // Si el usuario aún no interactúa con la pestaña, la política de autoplay bloquea la reproducción
+  if (typeof navigator !== 'undefined' && 'userActivation' in navigator && !(navigator as any).userActivation?.hasBeenActive) {
+    return;
+  }
 
   const soundPath = type === 'arrival' 
     ? '/arrival.wav' 
@@ -85,11 +128,14 @@ export const playNotificationSound = (type: NotificationType) => {
     const playPromise = audio.play();
     if (playPromise !== undefined) {
       playPromise.catch((err) => {
-        console.warn('[Audio] Error al reproducir archivo WAV, probando sintetizador:', err);
+        if (err.name === 'NotAllowedError') {
+          // Autoplay bloqueado por el navegador por falta de gesto previo
+          return;
+        }
         playSynthesizedChime(type);
       });
     }
-  } catch (e) {
+  } catch {
     playSynthesizedChime(type);
   }
 };
@@ -97,11 +143,19 @@ export const playNotificationSound = (type: NotificationType) => {
 // Generador de audio sintetizado con Web Audio API (fallback)
 export const playSynthesizedChime = (type: NotificationType) => {
   try {
+    if (typeof navigator !== 'undefined' && 'userActivation' in navigator && !(navigator as any).userActivation?.hasBeenActive) {
+      return;
+    }
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextClass) return;
-    const ctx = new AudioContextClass();
+
+    if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+      sharedAudioContext = new AudioContextClass();
+    }
+    const ctx = sharedAudioContext;
     if (ctx.state === 'suspended') {
-      ctx.resume();
+      ctx.resume().catch(() => {});
+      return;
     }
     const now = ctx.currentTime;
 
@@ -150,8 +204,8 @@ export const playSynthesizedChime = (type: NotificationType) => {
         osc.stop(now + offset + 0.17);
       });
     }
-  } catch (e) {
-    console.warn('[Audio] Error al reproducir chime acústico sintetizado:', e);
+  } catch {
+    // Silencioso
   }
 };
 
@@ -159,6 +213,10 @@ export const playSynthesizedChime = (type: NotificationType) => {
 export const triggerVibration = (type: NotificationType) => {
   if (typeof window !== 'undefined' && 'vibrate' in navigator) {
     try {
+      // Evitar advertencia de Chrome si el usuario aún no ha tocado la pantalla
+      if (typeof navigator !== 'undefined' && 'userActivation' in navigator && !(navigator as any).userActivation?.hasBeenActive) {
+        return;
+      }
       if (type === 'alert') {
         navigator.vibrate([500, 200, 500, 200, 500]);
       } else if (type === 'assignment') {
@@ -166,8 +224,8 @@ export const triggerVibration = (type: NotificationType) => {
       } else {
         navigator.vibrate([400, 150, 400]);
       }
-    } catch (e) {
-      console.warn('[Vibration] No soportada o bloqueada por política de energía:', e);
+    } catch {
+      // Ignorar si el dispositivo bloquea la vibración
     }
   }
 };
