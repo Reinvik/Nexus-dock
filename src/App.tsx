@@ -1443,27 +1443,21 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       schedule_date: dateStr,
       hour: hour,
       dock_id: dockId,
-      restriction_type: nextType
+      restriction_type: nextType,
+      note: nextType === 'mixto' ? 'Desbloqueado manualmente' : nextType === 'bloqueado' ? 'Bloqueado manualmente' : undefined
     };
 
     try {
-      if (nextType === 'mixto') {
-        await supabase
-          .from('schedule_restrictions')
-          .delete()
-          .match({ schedule_date: dateStr, hour: hour, dock_id: dockId });
-      } else {
-        await supabase
-          .from('schedule_restrictions')
-          .upsert([item], { onConflict: 'schedule_date,hour,dock_id' });
-      }
+      await supabase
+        .from('schedule_restrictions')
+        .upsert([item], { onConflict: 'schedule_date,hour,dock_id' });
     } catch (err) {
       console.warn('Upsert fallback local:', err);
     }
 
     setScheduleRestrictions(prev => {
       const filtered = prev.filter(r => !(r.schedule_date === dateStr && r.hour === hour && r.dock_id === dockId));
-      const updated = nextType === 'mixto' ? filtered : [...filtered, item];
+      const updated = [...filtered, item];
       if (typeof window !== 'undefined') {
         localStorage.setItem('nexus_schedule_restrictions', JSON.stringify(updated));
       }
@@ -1492,20 +1486,11 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         }
       }
 
-      // Guardar en Supabase
+      // Guardar en Supabase (incluso si es 'mixto', para actuar como anulación explícita sobre reglas recurrentes o almuerzo)
       try {
-        if (restrictionTypeSelected === 'mixto') {
-          for (const item of newItems) {
-            await supabase
-              .from('schedule_restrictions')
-              .delete()
-              .match({ schedule_date: item.schedule_date, hour: item.hour, dock_id: item.dock_id });
-          }
-        } else {
-          await supabase
-            .from('schedule_restrictions')
-            .upsert(newItems, { onConflict: 'schedule_date,hour,dock_id' });
-        }
+        await supabase
+          .from('schedule_restrictions')
+          .upsert(newItems, { onConflict: 'schedule_date,hour,dock_id' });
       } catch (err) {
         console.warn('Fallback a almacenamiento local:', err);
       }
@@ -1517,7 +1502,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
           const matchesDock = restrictionDockId === 'todos' || r.dock_id === restrictionDockId;
           return !(matchesDate && matchesHour && matchesDock);
         });
-        const updated = restrictionTypeSelected === 'mixto' ? filtered : [...filtered, ...newItems];
+        const updated = [...filtered, ...newItems];
         if (typeof window !== 'undefined') {
           localStorage.setItem('nexus_schedule_restrictions', JSON.stringify(updated));
         }
@@ -4846,6 +4831,15 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                             const isRefrigeradoOnly = restriction?.restriction_type === 'refrigerado';
                             const isBlocked = restriction?.restriction_type === 'bloqueado';
 
+                            const dateStr = selectedScheduleDate.toISOString().split('T')[0];
+                            const dayOfWeek = selectedScheduleDate.getDay();
+                            const isLunchHourConfigured = lunchBreakConfig.enabled &&
+                              lunchBreakConfig.hour === hour &&
+                              lunchBreakConfig.days.includes(dayOfWeek) &&
+                              (lunchBreakConfig.docks === 'todos' || lunchBreakConfig.docks === dock.id);
+                            const specificRestriction = scheduleRestrictions.find(r => r.schedule_date === dateStr && r.hour === hour && r.dock_id === dock.id);
+                            const isLunchExplicitlyUnlocked = isLunchHourConfigured && specificRestriction?.restriction_type === 'mixto';
+
                             if (isMaintenance) {
                               return (
                                 <td 
@@ -4872,14 +4866,29 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                                     {restriction?.note && (
                                       <span className="text-[8px] text-slate-400 font-medium truncate max-w-[110px]">{restriction.note}</span>
                                     )}
-                                  </div>
-                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/60 rounded-lg">
                                     <button
                                       type="button"
-                                      onClick={() => handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'mixto')}
-                                      className="bg-white hover:bg-slate-100 text-slate-800 px-2 py-1 rounded text-[9px] font-bold shadow-xs cursor-pointer"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'mixto');
+                                      }}
+                                      className="mt-1 bg-white hover:bg-emerald-50 text-emerald-800 hover:text-emerald-900 border border-slate-300 hover:border-emerald-300 px-2 py-0.5 rounded-md text-[9px] font-black shadow-2xs transition-all active:scale-95 cursor-pointer flex items-center gap-1 z-10"
                                     >
-                                      Desbloquear
+                                      <span>🔓</span>
+                                      <span>Desbloquear</span>
+                                    </button>
+                                  </div>
+                                  <div className="absolute inset-0 hidden sm:flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/60 rounded-lg z-20">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'mixto');
+                                      }}
+                                      className="bg-white hover:bg-slate-100 text-slate-800 px-2.5 py-1.5 rounded-lg text-xs font-bold shadow-md cursor-pointer flex items-center gap-1 active:scale-95 transition-transform"
+                                    >
+                                      <span>🔓</span>
+                                      <span>Desbloquear</span>
                                     </button>
                                   </div>
                                 </td>
@@ -4895,6 +4904,22 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                                 key={dock.id} 
                                 className={`p-2 border-r border-slate-200 last:border-r-0 align-top relative group min-h-[60px] ${slotBgClass}`}
                               >
+                                {/* Badge si fue desbloqueado durante horario de almuerzo */}
+                                {isLunchExplicitlyUnlocked && (
+                                  <div className="mb-1 flex items-center justify-between">
+                                    <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded flex items-center gap-1 border bg-emerald-50 text-emerald-800 border-emerald-300 shadow-2xs">
+                                      <span>🍱 Almuerzo Habilitado</span>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickToggleSlotRestriction(dock.id, hour, selectedScheduleDate, 'bloqueado')}
+                                      title="Volver a bloquear por hora de almuerzo"
+                                      className="text-slate-400 hover:text-red-500 text-[10px] font-bold px-1 cursor-pointer"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                )}
                                 {/* Badge de fijación de temperatura si está configurada */}
                                 {(isCongeladoOnly || isRefrigeradoOnly) && (
                                   <div className="mb-1 flex items-center justify-between">
