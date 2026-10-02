@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseMain } from '../lib/supabase';
 import cialLogo from '../assets/cial-alimentos-logo.png';
 import { Mail, Lock, ArrowRight, CheckCircle2, AlertCircle, Eye, EyeOff, RotateCcw, Truck } from 'lucide-react';
 
@@ -35,7 +35,34 @@ export default function LoginPage({ onDriverClick }: { onDriverClick: () => void
     setLoading(true);
     try {
       const cleanEmail = email.trim().toLowerCase();
-      const { error: authError } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+      let { error: authError } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+
+      // Si falla en Dock (PROD), verificar si el usuario tiene cuenta válida en Nexus Pallets / Outbound (MAIN)
+      if (authError && (authError.message.includes('Invalid login credentials') || authError.message.includes('User not found'))) {
+        try {
+          // Validar credenciales contra el servidor de Despacho / Pallets (MAIN)
+          const { data: mainData, error: mainError } = await supabaseMain.auth.signInWithPassword({
+            email: cleanEmail,
+            password
+          });
+
+          if (!mainError && mainData?.user) {
+            // ¡Usuario y contraseña válidos en Nexus Pallets!
+            // Sincronizar automáticamente la contraseña y usuario en Dock
+            await supabase.rpc('sync_user_credentials_from_main', {
+              target_email: cleanEmail,
+              new_password: password
+            });
+
+            // Reintentar inicio de sesión en Dock con la contraseña sincronizada
+            const retry = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+            authError = retry.error;
+          }
+        } catch (syncErr) {
+          console.warn('Error en sincronización automática con Nexus Pallets:', syncErr);
+        }
+      }
+
       if (authError) {
         if (authError.message.includes('Email not confirmed')) {
           setError('Tu correo aún no ha sido verificado. Revisa tu bandeja de entrada de @cial.cl.');
@@ -72,17 +99,34 @@ export default function LoginPage({ onDriverClick }: { onDriverClick: () => void
 
     setLoading(true);
     try {
-      const { error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: window.location.origin,
-          data: {
-            domain_verified: true,
-            registered_at: new Date().toISOString()
+      const cleanEmail = email.trim().toLowerCase();
+      const [r1] = await Promise.allSettled([
+        supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: {
+              domain_verified: true,
+              registered_at: new Date().toISOString()
+            }
           }
-        }
-      });
+        }),
+        supabaseMain.auth.signUp({
+          email: cleanEmail,
+          password,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: {
+              domain_verified: true,
+              registered_at: new Date().toISOString()
+            }
+          }
+        })
+      ]);
+
+      const mainAuthRes = r1.status === 'fulfilled' ? r1.value : null;
+      const authError = mainAuthRes?.error;
 
       if (authError) {
         if (authError.message.includes('User already registered')) {
@@ -91,7 +135,7 @@ export default function LoginPage({ onDriverClick }: { onDriverClick: () => void
           setError(authError.message);
         }
       } else {
-        setPendingEmail(email);
+        setPendingEmail(cleanEmail);
         setMode('check_email');
       }
     } finally {
@@ -110,14 +154,21 @@ export default function LoginPage({ onDriverClick }: { onDriverClick: () => void
 
     setLoading(true);
     try {
-      const { error: authError } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin
-      });
+      const cleanEmail = email.trim().toLowerCase();
+      const [r1] = await Promise.allSettled([
+        supabase.auth.resetPasswordForEmail(cleanEmail, {
+          redirectTo: window.location.origin
+        }),
+        supabaseMain.auth.resetPasswordForEmail(cleanEmail, {
+          redirectTo: window.location.origin
+        })
+      ]);
 
-      if (authError) {
-        setError(authError.message);
+      const mainRes = r1.status === 'fulfilled' ? r1.value : null;
+      if (mainRes?.error) {
+        setError(mainRes.error.message);
       } else {
-        setSuccess(`Hemos enviado un enlace de recuperación a ${email}. Revisa tu bandeja de entrada.`);
+        setSuccess(`Hemos enviado un enlace de recuperación a ${cleanEmail}. Revisa tu bandeja de entrada.`);
       }
     } finally {
       setLoading(false);
