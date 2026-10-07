@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Calendar, 
@@ -53,7 +53,8 @@ import {
   BellOff,
   Volume2,
   VolumeX,
-  Smartphone
+  Smartphone,
+  AlertTriangle
 } from 'lucide-react';
 import { supabase, supabaseMain, activeSchema } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -1875,6 +1876,34 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       return;
     }
 
+    const cleanFinalTractor = cleanPlateKey(finalTractor);
+    const existingActiveTruck = trucks.find(t => 
+      t.status !== 'completado' && 
+      cleanPlateKey(t.tractor_plate || t.patent) === cleanFinalTractor
+    );
+
+    if (existingActiveTruck) {
+      const statusLabel = existingActiveTruck.status === 'anden'
+        ? `en ANDÉN (${existingActiveTruck.dock?.name || 'Asignado'})`
+        : existingActiveTruck.status === 'espera'
+        ? 'en ESPERA en patio'
+        : existingActiveTruck.status === 'en_ruta'
+        ? 'en RUTA (Planta 2)'
+        : 'en CITAS programadas';
+
+      const confirmed = window.confirm(
+        `⚠️ AVISO DE DUPLICIDAD DETECTADA:\n\n` +
+        `Ya existe una operación activa para la patente "${finalTractor}" ${statusLabel}.\n` +
+        `• Conductor registrado: ${existingActiveTruck.driver}\n` +
+        `• Carga: ${existingActiveTruck.carrier}\n\n` +
+        `¿Deseas registrar este camión de todas formas como un nuevo ingreso duplicado?`
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
     const savedId = await ensureDriverAndVehiclesSaved(
       finalDriverName,
       driverRut,
@@ -2814,6 +2843,23 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     return driverMatch || carrierMatch || tractorMatch || trailerMatch || rutMatch || phoneMatch || patentMatch;
   });
 
+  const activeDuplicatePlates = useMemo(() => {
+    const counts = new Map<string, number>();
+    trucks.forEach(t => {
+      if (t.status === 'espera' || t.status === 'anden') {
+        const clean = cleanPlateKey(t.tractor_plate || t.patent);
+        if (clean) counts.set(clean, (counts.get(clean) || 0) + 1);
+      }
+    });
+    return counts;
+  }, [trucks]);
+
+  const isDuplicatePlate = (plate?: string | null): boolean => {
+    if (!plate) return false;
+    const clean = cleanPlateKey(plate);
+    return clean ? (activeDuplicatePlates.get(clean) || 0) > 1 : false;
+  };
+
   const getGroupedCompletedTrucks = () => {
     const completed = filteredTrucks.filter(t => t.status === 'completado')
       .sort((a, b) => {
@@ -3750,13 +3796,22 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                       className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm hover:border-slate-300 transition-all cursor-grab active:cursor-grabbing hover:shadow-md"
                     >
                       <div className="flex justify-between items-start gap-2">
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="flex flex-wrap gap-1.5 items-center">
                           <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-extrabold tracking-wider">
                             TR: {truck.tractor_plate || 'S/T'}
                           </span>
                           <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 font-bold tracking-wider">
                             R: {truck.trailer_plate || 'S/R'}
                           </span>
+                          {isDuplicatePlate(truck.tractor_plate || truck.patent) && (
+                            <span 
+                              className="bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs animate-pulse"
+                              title="¡Atención! Hay más de un camión activo con esta misma patente en patio."
+                            >
+                              <AlertTriangle className="w-3 h-3 text-amber-600" />
+                              DUPLICADO
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-1.5">
                           <button
@@ -3875,13 +3930,22 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                         <div className={`absolute top-0 right-0 left-0 h-1.5 ${countdown.isOvertime ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`}></div>
 
                         <div className="flex justify-between items-start gap-2">
-                          <div className="flex flex-wrap gap-1.5">
+                          <div className="flex flex-wrap gap-1.5 items-center">
                             <span className="font-mono text-xs bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded text-emerald-700 font-extrabold tracking-wider">
                               TR: {truck.tractor_plate || 'S/T'}
                             </span>
                             <span className="font-mono text-xs bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded text-slate-600 font-bold tracking-wider">
                               R: {truck.trailer_plate || 'S/R'}
                             </span>
+                            {isDuplicatePlate(truck.tractor_plate || truck.patent) && (
+                              <span 
+                                className="bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs animate-pulse"
+                                title="¡Atención! Hay más de un camión activo con esta misma patente en patio."
+                              >
+                                <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                DUPLICADO
+                              </span>
+                            )}
                           </div>
                           
                           <div className="flex items-center gap-1.5">
@@ -4526,13 +4590,22 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                         </div>
 
                         <div className="flex justify-between items-start gap-2">
-                          <div className="flex flex-wrap gap-1.5">
+                          <div className="flex flex-wrap gap-1.5 items-center">
                             <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-extrabold tracking-wider">
                               TR: {truck.tractor_plate || 'S/T'}
                             </span>
                             <span className="font-mono text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 font-bold tracking-wider">
                               R: {truck.trailer_plate || 'S/R'}
                             </span>
+                            {isDuplicatePlate(truck.tractor_plate || truck.patent) && (
+                              <span 
+                                className="bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs animate-pulse"
+                                title="¡Atención! Hay más de un camión activo con esta misma patente en patio."
+                              >
+                                <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                DUPLICADO
+                              </span>
+                            )}
                           </div>
                         </div>
 

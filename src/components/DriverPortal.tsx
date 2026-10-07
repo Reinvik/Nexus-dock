@@ -13,8 +13,25 @@ import {
   LogOut, 
   MapPin, 
   RotateCcw,
-  Navigation
+  Navigation,
+  AlertTriangle,
+  Layers,
+  Trash2
 } from 'lucide-react';
+
+const cleanPlateKey = (plate?: string | null): string => {
+  if (!plate) return '';
+  return plate.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+};
+
+const normalizeSearchText = (str?: string | null): string => {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+};
 
 interface YardOperation {
   id: string;
@@ -37,7 +54,7 @@ interface YardOperation {
 }
 
 export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => void }) {
-  const [activeStep, setActiveStep] = useState<'search' | 'monitor' | 'register_express'>('search');
+  const [activeStep, setActiveStep] = useState<'search' | 'monitor' | 'register_express' | 'select_duplicate'>('search');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +63,16 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
   // Datos del monitoreo activo
   const [activeOp, setActiveOp] = useState<YardOperation | null>(null);
   const [dockName, setDockName] = useState<string>('—');
+  const [otherActiveOps, setOtherActiveOps] = useState<YardOperation[]>([]);
+  const [multipleActiveOps, setMultipleActiveOps] = useState<YardOperation[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [detectedTrip, setDetectedTrip] = useState<YardOperation | null>(null);
+
+  // Alerta de duplicidad al registrar ingreso express
+  const [duplicateExpressWarning, setDuplicateExpressWarning] = useState<{
+    duplicates: YardOperation[];
+    pendingData: any;
+  } | null>(null);
 
   // Campos para Registro Express
   const [driverName, setDriverName] = useState('');
@@ -54,6 +81,46 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
   const [cargoType, setCargoType] = useState('Refrigerado');
   const [customCargoType, setCustomCargoType] = useState('');
   const [opType, setOpType] = useState<'Carga' | 'Descarga'>('Descarga');
+
+  // Auto-cerrar toast tras 6 segundos
+  useEffect(() => {
+    if (!toastMessage) return;
+    const t = setTimeout(() => setToastMessage(null), 6000);
+    return () => clearTimeout(t);
+  }, [toastMessage]);
+
+  // Detección automática en vivo al escribir patente en Registro Express
+  useEffect(() => {
+    const clean = cleanPlateKey(tractorPlate);
+    if (clean.length < 4 || activeStep !== 'register_express') {
+      setDetectedTrip(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const { data, error: err } = await supabase
+          .from('yard_operations')
+          .select(`
+            *,
+            dock:dock_id ( name )
+          `)
+          .in('status', ['en_ruta', 'planta_carga', 'cita', 'espera', 'anden']);
+
+        if (!err && data) {
+          const match = data.find(op => {
+            const p = cleanPlateKey(op.tractor_plate || op.patent);
+            return p === clean || (p && clean && (p.includes(clean) || clean.includes(p)));
+          });
+          setDetectedTrip(match || null);
+        }
+      } catch (e) {
+        // ignorar
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [tractorPlate, activeStep]);
 
   // Verificar si hay una operación activa guardada en localStorage al montar
   useEffect(() => {
@@ -92,6 +159,7 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
         setActiveOp(data);
         setDockName(data.dock?.name || '—');
         setActiveStep('monitor');
+        checkOtherActiveTickets(data);
       }
     } catch (e) {
       console.error('Error cargando operación activa:', e);
@@ -117,9 +185,44 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
       if (data) {
         setActiveOp(data);
         setDockName(data.dock?.name || '—');
+        checkOtherActiveTickets(data);
       }
     } catch (e) {
       console.error('Error refrescando operación:', e);
+    }
+  };
+
+  const checkOtherActiveTickets = async (currentOp: YardOperation) => {
+    try {
+      const cleanPlate = cleanPlateKey(currentOp.tractor_plate || currentOp.patent);
+      const normDriver = normalizeSearchText(currentOp.driver);
+
+      const { data, error: err } = await supabase
+        .from('yard_operations')
+        .select(`
+          *,
+          dock:dock_id ( name )
+        `)
+        .in('status', ['espera', 'anden'])
+        .neq('id', currentOp.id);
+
+      if (err) throw err;
+
+      if (data) {
+        const matches = data.filter(item => {
+          const itemCleanPlate = cleanPlateKey(item.tractor_plate || item.patent);
+          const itemNormDriver = normalizeSearchText(item.driver);
+          const samePlate = Boolean(cleanPlate && itemCleanPlate && cleanPlate === itemCleanPlate);
+          const sameDriver = Boolean(
+            normDriver && itemNormDriver && 
+            (normDriver.includes(itemNormDriver) || itemNormDriver.includes(normDriver))
+          );
+          return samePlate || sameDriver;
+        });
+        setOtherActiveOps(matches);
+      }
+    } catch (e) {
+      console.error('Error verificando otros tickets activos:', e);
     }
   };
 
@@ -127,12 +230,16 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
     e.preventDefault();
     setError(null);
     setFoundCita(null);
+    setMultipleActiveOps([]);
 
     const query = searchQuery.trim();
     if (!query) {
       setError('Por favor, ingresa tu patente o nombre.');
       return;
     }
+
+    const cleanQ = cleanPlateKey(query);
+    const normQ = normalizeSearchText(query);
 
     setLoading(true);
     try {
@@ -143,45 +250,118 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
           *,
           dock:dock_id ( name )
         `)
-        .or(`tractor_plate.ilike.%${query}%,driver.ilike.%${query}%`)
         .in('status', ['espera', 'anden'])
-        .order('entry_time', { ascending: false })
-        .limit(1);
+        .order('entry_time', { ascending: false });
 
       if (activeErr) throw activeErr;
 
       if (activeData && activeData.length > 0) {
-        const op = activeData[0];
-        localStorage.setItem('nexus_driver_op_id', op.id);
-        setActiveOp(op);
-        setDockName(op.dock?.name || '—');
-        setActiveStep('monitor');
-        setSearchQuery('');
-        return;
+        const matches = activeData.filter(op => {
+          const opPlate = cleanPlateKey(op.tractor_plate || op.patent);
+          const opDriver = normalizeSearchText(op.driver);
+
+          const matchPlate = cleanQ && opPlate 
+            ? opPlate.includes(cleanQ) || cleanQ.includes(opPlate) 
+            : false;
+          const matchDriver = normQ && opDriver 
+            ? opDriver.includes(normQ) || normQ.includes(opDriver) 
+            : false;
+
+          return matchPlate || matchDriver;
+        });
+
+        if (matches.length === 1) {
+          const op = matches[0];
+          localStorage.setItem('nexus_driver_op_id', op.id);
+          setActiveOp(op);
+          setDockName(op.dock?.name || '—');
+          setActiveStep('monitor');
+          setSearchQuery('');
+          checkOtherActiveTickets(op);
+          return;
+        }
+
+        if (matches.length > 1) {
+          // Ordenar priorizando los tickets que ya tienen andén asignado ('anden')
+          matches.sort((a, b) => {
+            if (a.status === 'anden' && b.status !== 'anden') return -1;
+            if (b.status === 'anden' && a.status !== 'anden') return 1;
+            return new Date(b.entry_time).getTime() - new Date(a.entry_time).getTime();
+          });
+
+          setMultipleActiveOps(matches);
+          setActiveStep('select_duplicate');
+          return;
+        }
       }
 
-      // 2. Si no hay operación activa, buscamos si hay una cita programada ('cita') para hoy
-      const { data: citaData, error: citaErr } = await supabase
+      // 2. Si no hay operación activa en patio, buscamos si hay viajes en ruta (Planta 2) o citas programadas
+      const { data: preArrivalData, error: preArrivalErr } = await supabase
         .from('yard_operations')
         .select(`
           *,
           dock:dock_id ( name )
         `)
-        .or(`tractor_plate.ilike.%${query}%,driver.ilike.%${query}%`)
-        .eq('status', 'cita')
-        .order('created_at', { ascending: false })
-        .limit(1);
+        .in('status', ['en_ruta', 'planta_carga', 'cita'])
+        .order('created_at', { ascending: false });
 
-      if (citaErr) throw citaErr;
+      if (preArrivalErr) throw preArrivalErr;
 
-      if (citaData && citaData.length > 0) {
-        setFoundCita(citaData[0]);
-      } else {
-        setError('No encontramos citas programadas para hoy con esos datos. Puedes registrar un ingreso express.');
+      if (preArrivalData && preArrivalData.length > 0) {
+        const preMatches = preArrivalData.filter(op => {
+          const opPlate = cleanPlateKey(op.tractor_plate || op.patent);
+          const opDriver = normalizeSearchText(op.driver);
+          const matchPlate = cleanQ && opPlate ? opPlate.includes(cleanQ) || cleanQ.includes(opPlate) : false;
+          const matchDriver = normQ && opDriver ? opDriver.includes(normQ) || normQ.includes(opDriver) : false;
+          return matchPlate || matchDriver;
+        });
+
+        if (preMatches.length > 0) {
+          setFoundCita(preMatches[0]);
+          return;
+        }
       }
+
+      setError('No encontramos citas programadas, viajes de Planta 2 ni camiones en patio con esos datos. Puedes registrar un ingreso express.');
     } catch (err: any) {
       console.error(err);
       setError('Ocurrió un error al buscar tus datos. Reintenta.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDismissDuplicate = async (opId: string) => {
+    setLoading(true);
+    try {
+      const { error: err } = await supabase
+        .from('yard_operations')
+        .update({
+          status: 'completado',
+          exit_time: new Date().toISOString()
+        })
+        .eq('id', opId);
+
+      if (err) throw err;
+
+      const remaining = multipleActiveOps.filter(o => o.id !== opId);
+      if (remaining.length === 1) {
+        const onlyOp = remaining[0];
+        localStorage.setItem('nexus_driver_op_id', onlyOp.id);
+        setActiveOp(onlyOp);
+        setDockName(onlyOp.dock?.name || '—');
+        setActiveStep('monitor');
+        setMultipleActiveOps([]);
+        checkOtherActiveTickets(onlyOp);
+      } else if (remaining.length === 0) {
+        setActiveStep('search');
+        setMultipleActiveOps([]);
+      } else {
+        setMultipleActiveOps(remaining);
+      }
+    } catch (e: any) {
+      console.error('Error descartando duplicado:', e);
+      setError('No se pudo descartar el ticket duplicado: ' + (e.message || ''));
     } finally {
       setLoading(false);
     }
@@ -210,6 +390,11 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
         await loadActiveOp(data.id);
         setFoundCita(null);
         setSearchQuery('');
+        setToastMessage(
+          foundCita.origin === 'planta_2' || foundCita.status === 'en_ruta'
+            ? '🚚 ¡Llegada confirmada! Conectado a tu viaje oficial de Planta 2.'
+            : '📅 ¡Llegada confirmada! Conectado a tu cita programada.'
+        );
       }
     } catch (e) {
       console.error(e);
@@ -219,8 +404,8 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
     }
   };
 
-  const handleRegisterExpress = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleRegisterExpress = async (e?: React.FormEvent, forceInsert = false) => {
+    if (e) e.preventDefault();
     setError(null);
 
     if (!driverName.trim() || !tractorPlate.trim()) {
@@ -231,7 +416,88 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
     setLoading(true);
     try {
       const finalCargo = cargoType === 'Otro' ? (customCargoType.trim() || 'Otro') : cargoType;
+      const cleanTractor = cleanPlateKey(tractorPlate);
+      const normDriver = normalizeSearchText(driverName);
 
+      // Verificamos si ya existe una operación activa para evitar duplicidad (incluyendo Planta 2)
+      if (!forceInsert) {
+        const { data: existingData, error: checkErr } = await supabase
+          .from('yard_operations')
+          .select(`
+            *,
+            dock:dock_id ( name )
+          `)
+          .in('status', ['en_ruta', 'planta_carga', 'cita', 'espera', 'anden']);
+
+        if (!checkErr && existingData && existingData.length > 0) {
+          const activeMatches = existingData.filter(op => {
+            const opPlate = cleanPlateKey(op.tractor_plate || op.patent);
+            const opDriver = normalizeSearchText(op.driver);
+            const samePlate = Boolean(cleanTractor && opPlate && cleanTractor === opPlate);
+            const sameDriver = Boolean(normDriver && opDriver && normDriver === opDriver);
+            return samePlate || sameDriver;
+          });
+
+          if (activeMatches.length > 0) {
+            // Priorizamos: 'anden' > 'espera' > 'en_ruta' > 'planta_carga' > 'cita'
+            const sorted = [...activeMatches].sort((a, b) => {
+              const score = (s: string) => s === 'anden' ? 5 : s === 'espera' ? 4 : s === 'en_ruta' ? 3 : s === 'planta_carga' ? 2 : 1;
+              return score(b.status) - score(a.status);
+            });
+            const chosen = sorted[0];
+
+            // Caso 1: El chofer está en ruta (Planta 2), cargando o citado -> Confirmamos llegada en su viaje oficial
+            if (chosen.status === 'en_ruta' || chosen.status === 'planta_carga' || chosen.status === 'cita') {
+              const { data: updatedOp, error: updateErr } = await supabase
+                .from('yard_operations')
+                .update({
+                  status: 'espera',
+                  entry_time: new Date().toISOString(),
+                  trailer_plate: trailerPlate.trim().toUpperCase() || chosen.trailer_plate
+                })
+                .eq('id', chosen.id)
+                .select(`
+                  *,
+                  dock:dock_id ( name )
+                `)
+                .single();
+
+              if (!updateErr && updatedOp) {
+                localStorage.setItem('nexus_driver_op_id', updatedOp.id);
+                setDriverName('');
+                setTractorPlate('');
+                setTrailerPlate('');
+                setCustomCargoType('');
+                setDetectedTrip(null);
+                setToastMessage(
+                  updatedOp.origin === 'planta_2' || chosen.status === 'en_ruta'
+                    ? '🚚 ¡Llegada confirmada! Conectado a tu viaje oficial de Planta 2 para evitar duplicados.'
+                    : '📅 ¡Llegada confirmada! Conectado a tu cita programada.'
+                );
+                await loadActiveOp(updatedOp.id);
+                return;
+              }
+            }
+
+            // Caso 2: El chofer ya estaba en patio ('espera' o 'anden')
+            localStorage.setItem('nexus_driver_op_id', chosen.id);
+            setDriverName('');
+            setTractorPlate('');
+            setTrailerPlate('');
+            setCustomCargoType('');
+            setDetectedTrip(null);
+            setToastMessage(
+              chosen.status === 'anden'
+                ? `🚪 ¡Tu camión ya tiene andén asignado (${chosen.dock?.name || 'Andén'})! Te redirigimos a tu ticket.`
+                : '⏳ ¡Tu camión ya estaba registrado en espera de patio! Te redirigimos a tu ticket.'
+            );
+            await loadActiveOp(chosen.id);
+            return;
+          }
+        }
+      }
+
+      // Si no existe ticket previo, se crea el ingreso express nuevo
       const { data, error: err } = await supabase
         .from('yard_operations')
         .insert({
@@ -244,18 +510,21 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
           status: 'espera',
           entry_time: new Date().toISOString()
         })
-        .select()
+        .select(`
+          *,
+          dock:dock_id ( name )
+        `)
         .single();
 
       if (err) throw err;
 
       if (data) {
         localStorage.setItem('nexus_driver_op_id', data.id);
-        // Reset campos
         setDriverName('');
         setTractorPlate('');
         setTrailerPlate('');
         setCustomCargoType('');
+        setDetectedTrip(null);
         await loadActiveOp(data.id);
       }
     } catch (e: any) {
@@ -305,6 +574,23 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
       {/* Cuerpo Principal */}
       <main className="flex-1 max-w-md w-full mx-auto p-4 flex flex-col justify-start">
         
+        {/* Toast Notificación de Redirección / Llegada */}
+        {toastMessage && (
+          <div className="mb-4 bg-slate-900 text-white border-2 border-emerald-400 rounded-3xl p-4 shadow-xl flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-2.5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+              <p className="text-xs font-bold leading-snug text-emerald-100">{toastMessage}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setToastMessage(null)}
+              className="text-white/60 hover:text-white p-1 rounded-lg text-xs cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* === STEP 1: BUSCAR CITA / REGISTROS === */}
         {activeStep === 'search' && !foundCita && (
           <div className="space-y-5 my-auto">
@@ -381,87 +667,247 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
           </div>
         )}
 
-        {/* === STEP 1.5: CITA ENCONTRADA - CONFIRMAR LLEGADA === */}
-        {foundCita && (
-          <div className="space-y-5 my-auto">
-            <div className="text-center space-y-2">
-              <div className="w-16 h-16 bg-yellow-50 border border-yellow-100 rounded-3xl flex items-center justify-center mx-auto shadow-sm">
-                <Clock className="w-8 h-8 text-yellow-600 animate-pulse" />
-              </div>
-              <h2 className="text-xl font-extrabold text-slate-800">Cita Encontrada</h2>
-              <p className="text-sm text-slate-500 font-medium leading-relaxed">
-                ¡Excelente! Tienes una cita programada para hoy. Confirma tu llegada para ingresar a patio.
-              </p>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-                <div className="flex justify-between border-b border-slate-200/60 pb-2">
-                  <span className="text-xs text-slate-400 font-semibold">Conductor</span>
-                  <span className="text-xs text-slate-800 font-extrabold">{foundCita.driver}</span>
-                </div>
-                <div className="flex justify-between border-b border-slate-200/60 pb-2">
-                  <span className="text-xs text-slate-400 font-semibold">Patente Tractor</span>
-                  <span className="text-xs font-mono text-slate-800 font-extrabold bg-slate-200 px-2 py-0.5 rounded-md leading-none">{foundCita.tractor_plate || foundCita.patent}</span>
-                </div>
-                {foundCita.trailer_plate && (
-                  <div className="flex justify-between border-b border-slate-200/60 pb-2">
-                    <span className="text-xs text-slate-400 font-semibold">Patente Rampla</span>
-                    <span className="text-xs font-mono text-slate-800 font-extrabold bg-slate-200 px-2 py-0.5 rounded-md leading-none">{foundCita.trailer_plate}</span>
-                  </div>
-                )}
-                <div className="flex justify-between border-b border-slate-200/60 pb-2">
-                  <span className="text-xs text-slate-400 font-semibold">Tipo Operación</span>
-                  <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${foundCita.type === 'Descarga' ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>{foundCita.type}</span>
-                </div>
-                 <div className="flex justify-between border-b border-slate-200/60 pb-2">
-                  <span className="text-xs text-slate-400 font-semibold">Carga</span>
-                  <span className="text-xs text-slate-800 font-bold">{foundCita.carrier}</span>
-                </div>
-                {foundCita.scheduled_entry_time && (
-                  <div className="flex justify-between pt-1">
-                    <span className="text-xs text-slate-400 font-semibold">Horario Citado</span>
-                    <span className="text-xs text-emerald-700 font-extrabold flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-lg leading-none">
-                      <Clock className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
-                      {(() => {
-                        const dateObj = new Date(foundCita.scheduled_entry_time);
-                        const fecha = dateObj.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' });
-                        const hora = dateObj.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-                        return `${fecha} - ${hora} hrs`;
-                      })()}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <button
-                  onClick={handleConfirmArrival}
-                  disabled={loading}
-                  className="w-full flex items-center justify-center gap-2 bg-[#0a5c36] hover:bg-[#08482a] disabled:bg-slate-300 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl text-sm font-extrabold transition-all cursor-pointer shadow-md active:scale-95"
-                >
-                  {loading ? (
-                    <RotateCcw className="w-4 h-4 animate-spin" />
+        {/* === STEP 1.5: CITA ENCONTRADA / VIAJE PLANTA 2 - CONFIRMAR LLEGADA === */}
+        {foundCita && (() => {
+          const isPlanta2 = foundCita.origin === 'planta_2' || foundCita.status === 'en_ruta' || foundCita.status === 'planta_carga';
+          return (
+            <div className="space-y-5 my-auto">
+              <div className="text-center space-y-2">
+                <div className={`w-16 h-16 rounded-3xl flex items-center justify-center mx-auto shadow-sm border ${
+                  isPlanta2 ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-yellow-50 border-yellow-100 text-yellow-600'
+                }`}>
+                  {isPlanta2 ? (
+                    <Truck className="w-8 h-8 animate-bounce" />
                   ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      CONFIRMAR LLEGADA A PATIO
-                    </>
+                    <Clock className="w-8 h-8 text-yellow-600 animate-pulse" />
                   )}
-                </button>
+                </div>
+                <h2 className="text-xl font-extrabold text-slate-800">
+                  {isPlanta2 ? 'Viaje de Planta 2 Encontrado' : 'Cita Encontrada'}
+                </h2>
+                <p className="text-sm text-slate-500 font-medium leading-relaxed px-1">
+                  {isPlanta2
+                    ? 'Detectamos el despacho oficial de Planta 2 para tu camión. Confirma tu llegada a Patio CD para ingresar a la espera de andén sin duplicar tickets.'
+                    : '¡Excelente! Tienes una cita programada para hoy. Confirma tu llegada para ingresar a patio.'}
+                </p>
+              </div>
 
-                <button
-                  onClick={() => {
-                    setFoundCita(null);
-                    setError(null);
-                  }}
-                  className="w-full flex items-center justify-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 font-bold transition-all py-2 cursor-pointer"
-                >
-                  <ArrowLeft className="w-3.5 h-3.5" />
-                  Volver a buscar
-                </button>
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                  {isPlanta2 && (
+                    <div className="flex justify-between border-b border-slate-200/60 pb-2">
+                      <span className="text-xs text-slate-400 font-semibold">Origen Oficial</span>
+                      <span className="text-xs text-blue-700 font-extrabold bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md">
+                        Planta 2 · Interplanta
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between border-b border-slate-200/60 pb-2">
+                    <span className="text-xs text-slate-400 font-semibold">Conductor</span>
+                    <span className="text-xs text-slate-800 font-extrabold">{foundCita.driver}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-200/60 pb-2">
+                    <span className="text-xs text-slate-400 font-semibold">Patente Tractor</span>
+                    <span className="text-xs font-mono text-slate-800 font-extrabold bg-slate-200 px-2 py-0.5 rounded-md leading-none">{foundCita.tractor_plate || foundCita.patent}</span>
+                  </div>
+                  {foundCita.trailer_plate && (
+                    <div className="flex justify-between border-b border-slate-200/60 pb-2">
+                      <span className="text-xs text-slate-400 font-semibold">Patente Rampla</span>
+                      <span className="text-xs font-mono text-slate-800 font-extrabold bg-slate-200 px-2 py-0.5 rounded-md leading-none">{foundCita.trailer_plate}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between border-b border-slate-200/60 pb-2">
+                    <span className="text-xs text-slate-400 font-semibold">Tipo Operación</span>
+                    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${foundCita.type === 'Descarga' ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>{foundCita.type}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-200/60 pb-2">
+                    <span className="text-xs text-slate-400 font-semibold">Carga</span>
+                    <span className="text-xs text-slate-800 font-bold">{foundCita.carrier}</span>
+                  </div>
+                  {foundCita.scheduled_entry_time && (
+                    <div className="flex justify-between pt-1">
+                      <span className="text-xs text-slate-400 font-semibold">Horario Citado</span>
+                      <span className="text-xs text-emerald-700 font-extrabold flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-lg leading-none">
+                        <Clock className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                        {(() => {
+                          const dateObj = new Date(foundCita.scheduled_entry_time);
+                          const fecha = dateObj.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' });
+                          const hora = dateObj.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+                          return `${fecha} - ${hora} hrs`;
+                        })()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <button
+                    onClick={handleConfirmArrival}
+                    disabled={loading}
+                    className="w-full flex items-center justify-center gap-2 bg-[#0a5c36] hover:bg-[#08482a] disabled:bg-slate-300 disabled:cursor-not-allowed text-white py-3.5 rounded-2xl text-sm font-extrabold transition-all cursor-pointer shadow-md active:scale-95"
+                  >
+                    {loading ? (
+                      <RotateCcw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        {isPlanta2 ? 'CONFIRMAR LLEGADA A PATIO CD' : 'CONFIRMAR LLEGADA A PATIO'}
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setFoundCita(null);
+                      setError(null);
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 font-bold transition-all py-2 cursor-pointer"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    Volver a buscar
+                  </button>
+                </div>
               </div>
             </div>
+          );
+        })()}
+
+        {/* === STEP 1.8: DETECCIÓN DE MÚLTIPLES TICKETS (DUPLICIDAD) === */}
+        {activeStep === 'select_duplicate' && (
+          <div className="space-y-4 my-auto">
+            <div className="text-center space-y-1.5">
+              <div className="w-14 h-14 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+                <Layers className="w-7 h-7 text-amber-600" />
+              </div>
+              <h2 className="text-xl font-extrabold text-slate-800">Tickets Activos Detectados</h2>
+              <p className="text-xs text-slate-500 font-medium px-2 leading-relaxed">
+                Encontramos <strong className="text-slate-700">{multipleActiveOps.length} registros activos</strong> para tu búsqueda.
+              </p>
+              {multipleActiveOps.some(o => o.status === 'anden') ? (
+                <div className="mt-2 text-emerald-800 font-bold bg-emerald-50 border border-emerald-200 rounded-2xl p-2.5 text-xs flex items-center justify-center gap-2">
+                  <Navigation className="w-4 h-4 text-emerald-600 rotate-45 shrink-0" />
+                  <span>¡Uno de tus tickets ya tiene <strong>Andén Asignado</strong>!</span>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-500">
+                  Selecciona cuál deseas monitorear o descarta si uno se creó por error:
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              {multipleActiveOps.map((op, idx) => {
+                const isAnden = op.status === 'anden';
+                return (
+                  <div 
+                    key={op.id}
+                    className={`bg-white rounded-3xl p-4 shadow-sm border-2 transition-all ${
+                      isAnden 
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/15 shadow-emerald-500/10' 
+                        : 'border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-2.5 mb-2.5">
+                      <div>
+                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
+                          Ticket #{idx + 1}
+                        </span>
+                        <h4 className="font-extrabold text-sm text-slate-800">{op.driver}</h4>
+                      </div>
+                      <div>
+                        {isAnden ? (
+                          <span className="inline-flex items-center gap-1 bg-emerald-500 text-white text-[10px] font-black px-2.5 py-1 rounded-full shadow-xs">
+                            <Navigation className="w-3 h-3 rotate-45 shrink-0" />
+                            ANDÉN: {op.dock?.name || 'ASIGNADO'}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-extrabold px-2.5 py-1 rounded-full">
+                            <Clock className="w-3 h-3 text-blue-500" />
+                            EN ESPERA
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs mb-3 bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
+                      <div>
+                        <span className="text-[10px] text-slate-400 font-semibold block">Tractor</span>
+                        <span className="font-mono font-bold text-slate-800 text-xs">
+                          {op.tractor_plate || op.patent || 'S/P'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 font-semibold block">Rampla</span>
+                        <span className="font-mono font-bold text-slate-800 text-xs">
+                          {op.trailer_plate || '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 font-semibold block">Operación / Carga</span>
+                        <span className="font-bold text-slate-700 text-xs truncate block">
+                          {op.type} · {op.carrier}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 font-semibold block">Ingreso a Patio</span>
+                        <span className="font-bold text-slate-700 text-xs">
+                          {new Date(op.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          localStorage.setItem('nexus_driver_op_id', op.id);
+                          setActiveOp(op);
+                          setDockName(op.dock?.name || '—');
+                          setActiveStep('monitor');
+                          checkOtherActiveTickets(op);
+                        }}
+                        className={`w-full py-3 rounded-2xl text-xs font-black flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer active:scale-95 ${
+                          isAnden 
+                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white' 
+                            : 'bg-[#0a5c36] hover:bg-[#08482a] text-white'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Monitorear este Ticket {isAnden ? '(Recomendado)' : ''}</span>
+                      </button>
+
+                      {!isAnden && (
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={async () => {
+                            if (window.confirm('¿Deseas descartar este ticket duplicado que está en espera? Se marcará como finalizado.')) {
+                              await handleDismissDuplicate(op.id);
+                            }
+                          }}
+                          className="w-full py-2 text-[10px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Descartar este duplicado por error</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMultipleActiveOps([]);
+                setActiveStep('search');
+              }}
+              className="w-full py-2.5 text-xs text-slate-400 hover:text-slate-600 font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Volver a buscar</span>
+            </button>
           </div>
         )}
 
@@ -530,6 +976,45 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
                 </div>
               </div>
 
+              {detectedTrip && (
+                <div className="bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-3.5 text-xs space-y-2 animate-in fade-in duration-150">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-1.5 bg-emerald-100 rounded-xl text-emerald-800 shrink-0 mt-0.5">
+                      <Navigation className="w-4 h-4 rotate-45" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-extrabold text-emerald-900 leading-snug">
+                        {detectedTrip.origin === 'planta_2' || detectedTrip.status === 'en_ruta'
+                          ? '¡Viaje de Planta 2 detectado para esta patente!'
+                          : detectedTrip.status === 'cita'
+                          ? '¡Cita previa detectada para esta patente!'
+                          : '¡Camión ya registrado en patio!'}
+                      </p>
+                      <p className="text-[11px] text-emerald-700 font-semibold mt-0.5">
+                        Conductor: <strong>{detectedTrip.driver}</strong> · Estado: <strong className="uppercase">{
+                          detectedTrip.status === 'en_ruta' ? 'En Ruta (Planta 2)' :
+                          detectedTrip.status === 'planta_carga' ? 'Cargando en Planta 2' :
+                          detectedTrip.status === 'anden' ? `En Andén (${detectedTrip.dock?.name || 'Asignado'})` :
+                          detectedTrip.status === 'espera' ? 'En Espera en Patio' : 'Cita Programada'
+                        }</strong>
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRegisterExpress()}
+                    className="w-full bg-[#0a5c36] hover:bg-[#08482a] text-white py-2.5 rounded-xl text-xs font-black shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>
+                      {detectedTrip.status === 'en_ruta' || detectedTrip.status === 'planta_carga' || detectedTrip.status === 'cita'
+                        ? 'Confirmar Llegada en mi Viaje Oficial (Evitar Duplicado)'
+                        : 'Ir a Monitorear mi Ticket Existente'}
+                    </span>
+                  </button>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                 <div>
                   <label className="block text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1 pl-1">Operación</label>
@@ -590,6 +1075,85 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
                 )}
               </button>
             </form>
+
+            {/* Modal de Advertencia de Duplicidad en Registro Express */}
+            {duplicateExpressWarning && (
+              <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+                <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl border border-amber-200 animate-in fade-in zoom-in duration-200">
+                  <div className="w-14 h-14 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-center mx-auto text-amber-600">
+                    <AlertTriangle className="w-7 h-7" />
+                  </div>
+                  
+                  <div className="text-center space-y-1">
+                    <h3 className="font-extrabold text-slate-800 text-lg">¿Camión Ya Registrado?</h3>
+                    <p className="text-xs text-slate-500 font-medium">
+                      Ya detectamos <strong className="text-slate-700">{duplicateExpressWarning.duplicates.length} registro(s) activo(s)</strong> para esta patente o chofer:
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {duplicateExpressWarning.duplicates.map(op => (
+                      <div key={op.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs space-y-1">
+                        <div className="flex justify-between items-center">
+                          <span className="font-mono font-bold text-slate-800">{op.tractor_plate || op.patent}</span>
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                            op.status === 'anden' ? 'bg-emerald-100 text-emerald-800' :
+                            op.status === 'espera' ? 'bg-blue-100 text-blue-800' :
+                            'bg-amber-100 text-amber-800'
+                          }`}>
+                            {op.status === 'anden' ? `Andén ${op.dock?.name || 'Asignado'}` :
+                             op.status === 'espera' ? 'En Espera (Patio)' : 'Cita Programada'}
+                          </span>
+                        </div>
+                        <p className="text-slate-500 text-[11px] font-semibold">{op.driver} · {op.carrier}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="space-y-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sorted = [...duplicateExpressWarning.duplicates].sort((a, b) => {
+                          if (a.status === 'anden') return -1;
+                          if (b.status === 'anden') return 1;
+                          return 0;
+                        });
+                        const chosen = sorted[0];
+                        localStorage.setItem('nexus_driver_op_id', chosen.id);
+                        setActiveOp(chosen);
+                        setDockName(chosen.dock?.name || '—');
+                        setActiveStep('monitor');
+                        setDuplicateExpressWarning(null);
+                        checkOtherActiveTickets(chosen);
+                      }}
+                      className="w-full bg-[#0a5c36] hover:bg-[#08482a] text-white py-3 rounded-2xl text-xs font-black shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Monitorear Ticket Existente</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleRegisterExpress(undefined, true);
+                      }}
+                      className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                    >
+                      Crear Nuevo Registro de Todas Formas
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDuplicateExpressWarning(null)}
+                      className="w-full text-slate-400 hover:text-slate-600 text-xs font-bold py-1.5 transition-all cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -597,6 +1161,97 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
         {activeStep === 'monitor' && activeOp && (
           <div className="space-y-5 my-auto">
             
+            {/* Aviso si existe otro ticket activo con andén asignado o en patio */}
+            {otherActiveOps.length > 0 && (
+              <div className={`rounded-3xl p-4 shadow-md space-y-3 border-2 ${
+                otherActiveOps.some(o => o.status === 'anden')
+                  ? 'bg-gradient-to-r from-emerald-600 to-[#0a5c36] text-white border-emerald-400'
+                  : 'bg-amber-50 text-amber-900 border-amber-300'
+              }`}>
+                <div className="flex items-start gap-3">
+                  <div className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 ${
+                    otherActiveOps.some(o => o.status === 'anden')
+                      ? 'bg-white/20 text-white'
+                      : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    {otherActiveOps.some(o => o.status === 'anden') ? (
+                      <Navigation className="w-5 h-5 rotate-45" />
+                    ) : (
+                      <AlertTriangle className="w-5 h-5" />
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    <p className={`text-[10px] font-black uppercase tracking-wider ${
+                      otherActiveOps.some(o => o.status === 'anden') ? 'text-emerald-200' : 'text-amber-700'
+                    }`}>
+                      {otherActiveOps.some(o => o.status === 'anden') ? '¡Andén Asignado en Otro Ticket!' : 'Otro Ticket Detectado'}
+                    </p>
+                    <h4 className="text-sm font-black leading-snug">
+                      {otherActiveOps.some(o => o.status === 'anden')
+                        ? `¡Ya fuiste asignado al ${otherActiveOps.find(o => o.status === 'anden')?.dock?.name || 'Andén'}!`
+                        : 'Tienes otro ticket activo en patio con tus mismos datos.'}
+                    </h4>
+                    <p className={`text-[11px] font-semibold mt-0.5 ${
+                      otherActiveOps.some(o => o.status === 'anden') ? 'text-emerald-100' : 'text-amber-800'
+                    }`}>
+                      {otherActiveOps.some(o => o.status === 'anden')
+                        ? 'Estás viendo un ticket en espera, pero en tu otro registro ya puedes posicionarte en andén.'
+                        : 'Puedes alternar entre tus tickets o descartar el que no corresponda.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-1">
+                  {otherActiveOps.map(other => (
+                    <div key={other.id} className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          localStorage.setItem('nexus_driver_op_id', other.id);
+                          setActiveOp(other);
+                          setDockName(other.dock?.name || '—');
+                          checkOtherActiveTickets(other);
+                        }}
+                        className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                          otherActiveOps.some(o => o.status === 'anden')
+                            ? 'bg-white hover:bg-emerald-50 text-[#0a5c36]'
+                            : 'bg-amber-600 hover:bg-amber-700 text-white'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>
+                          Cambiar a {other.status === 'anden' ? `Andén (${other.dock?.name || 'Asignado'})` : 'Ticket en Espera'}
+                        </span>
+                      </button>
+
+                      {other.status === 'espera' && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (window.confirm('¿Deseas descartar el otro ticket duplicado que está en espera?')) {
+                              try {
+                                await supabase
+                                  .from('yard_operations')
+                                  .update({ status: 'completado', exit_time: new Date().toISOString() })
+                                  .eq('id', other.id);
+                                if (activeOp) checkOtherActiveTickets(activeOp);
+                              } catch (err) {
+                                console.error(err);
+                              }
+                            }
+                          }}
+                          className="bg-red-500/10 hover:bg-red-500/20 text-red-600 px-3 py-2 rounded-xl text-[10px] font-bold border border-red-200 transition-all cursor-pointer"
+                          title="Descartar el ticket duplicado en espera"
+                        >
+                          Descartar
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Cabecera del ticket monitoreado */}
             <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm flex items-center justify-between">
               <div className="space-y-0.5">
