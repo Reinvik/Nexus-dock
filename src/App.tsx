@@ -28,6 +28,8 @@ import {
   Key,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Thermometer,
   Snowflake,
   SlidersHorizontal,
@@ -142,13 +144,13 @@ export const INITIAL_RECURRING_RULES: ScheduleRecurringRule[] = [
   { day_of_week: 5, hour: 12, dock_id: null, restriction_type: 'congelado', note: 'Solo congelado (No refrigerado)' },
 ];
 
-interface Dock {
+export interface Dock {
   id: string;
   name: string;
   status: 'Disponible' | 'Ocupado' | 'Mantenimiento';
 }
 
-interface Driver {
+export interface Driver {
   id: string;
   name: string;
   rut: string;
@@ -157,7 +159,7 @@ interface Driver {
   default_trailer: string | null;
 }
 
-interface Vehicle {
+export interface Vehicle {
   id: string;
   plate: string;
   type: 'Tractor' | 'Rampla';
@@ -166,7 +168,7 @@ interface Vehicle {
 export type OperationStatus = 'cita' | 'planta_carga' | 'en_ruta' | 'espera' | 'anden' | 'completado';
 export type OperationOrigin = 'planta_2' | 'patio_cd';
 
-interface YardOperation {
+export interface YardOperation {
   id: string;
   patent: string | null;
   tractor_plate: string | null;
@@ -480,6 +482,22 @@ const formatLocalDatetime = (date: Date) => {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 };
 
+const getLocalDateString = (date: Date = new Date()) => {
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const yyyy = date.getFullYear();
+  const mm = pad(date.getMonth() + 1);
+  const dd = pad(date.getDate());
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const getTodayDateString = () => getLocalDateString(new Date());
+
+const getYesterdayDateString = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return getLocalDateString(d);
+};
+
 const formatDurationMs = (ms: number | null | undefined) => {
   if (ms === null || ms === undefined || ms < 0 || isNaN(ms)) return '—';
   const totalMin = Math.floor(ms / (60 * 1000));
@@ -604,6 +622,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  // Estado para filtro de fecha en la columna Recibidos
+  const [selectedCompletedDate, setSelectedCompletedDate] = useState<string>(() => getTodayDateString());
 
   // Datos de Supabase
   const [trucks, setTrucks] = useState<YardOperation[]>([]);
@@ -2775,6 +2795,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
 
   const handleFinishOperation = async (truckId: string, dockId: string | null) => {
     setErrorMsg(null);
+    setSelectedCompletedDate(getTodayDateString());
 
     setTrucks(prev => prev.map(t => {
       if (t.id === truckId) {
@@ -2860,7 +2881,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     return clean ? (activeDuplicatePlates.get(clean) || 0) > 1 : false;
   };
 
-  const getGroupedCompletedTrucks = () => {
+  const groupedCompletedTrucks = useMemo(() => {
     const completed = filteredTrucks.filter(t => t.status === 'completado')
       .sort((a, b) => {
         const timeA = a.exit_time ? new Date(a.exit_time).getTime() : (a.end_time ? new Date(a.end_time).getTime() : 0);
@@ -2885,9 +2906,10 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     });
 
     return groups;
-  };
+  }, [filteredTrucks]);
 
   const formatGroupDate = (dateStr: string) => {
+    if (!dateStr) return '';
     const [year, month, day] = dateStr.split('-');
     const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
     const today = new Date();
@@ -2908,6 +2930,15 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     const dayName = date.toLocaleDateString('es-CL', { weekday: 'long' });
     const capitalizedDay = dayName.charAt(0).toUpperCase() + dayName.slice(1);
     return `${capitalizedDay} (${day}/${month})`;
+  };
+
+  const completedTrucksForSelectedDate = groupedCompletedTrucks[selectedCompletedDate] || [];
+
+  const shiftCompletedDate = (days: number) => {
+    const [y, m, d] = (selectedCompletedDate || getTodayDateString()).split('-').map(Number);
+    const target = new Date(y, m - 1, d);
+    target.setDate(target.getDate() + days);
+    setSelectedCompletedDate(getLocalDateString(target));
   };
 
   const handleUpdateDockStatus = async (dockId: string, newStatus: 'Disponible' | 'Ocupado' | 'Mantenimiento') => {
@@ -3601,7 +3632,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                     mobileYardColumn === 'completado' ? 'bg-slate-700 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
                   }`}
                 >
-                  Recibidos ({filteredTrucks.filter(t => t.status === 'completado').length})
+                  Recibidos ({completedTrucksForSelectedDate.length})
                 </button>
               </div>
 
@@ -4033,7 +4064,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 </div>
               </div>
 
-              {/* 4. Columna: Recibidos Hoy */}
+              {/* 4. Columna: Recibidos Filtrados por Día */}
               <div 
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, 'completado')}
@@ -4041,109 +4072,206 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   mobileYardColumn !== 'all' && mobileYardColumn !== 'completado' ? 'hidden md:flex' : 'flex'
                 }`}
               >
-                <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
+                {/* Cabecera de la Columna con Título dinámico y Contador del día seleccionado */}
+                <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-3">
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-slate-400"></span>
-                    <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Recibidos Hoy</h3>
+                    <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">
+                      {selectedCompletedDate === getTodayDateString()
+                        ? 'Recibidos Hoy'
+                        : selectedCompletedDate === getYesterdayDateString()
+                        ? 'Recibidos Ayer'
+                        : `Recibidos (${selectedCompletedDate.split('-')[2]}/${selectedCompletedDate.split('-')[1]})`}
+                    </h3>
                   </div>
-                  <span className="bg-slate-200 text-slate-700 text-xs px-3 py-1 rounded-full font-bold shadow-sm">
-                    {filteredTrucks.filter(t => t.status === 'completado').length}
+                  <span 
+                    className="bg-slate-200 text-slate-700 text-xs px-3 py-1 rounded-full font-bold shadow-sm"
+                    title={`${completedTrucksForSelectedDate.length} camiones recibidos el ${formatGroupDate(selectedCompletedDate)}`}
+                  >
+                    {completedTrucksForSelectedDate.length}
                   </span>
                 </div>
+
+                {/* Barra de Navegación y Selección de Fecha */}
+                <div className="flex items-center justify-between gap-1 bg-white border border-slate-200/90 rounded-xl p-1 mb-3.5 shadow-2xs">
+                  {/* Botón Día Anterior (<) */}
+                  <button
+                    type="button"
+                    onClick={() => shiftCompletedDate(-1)}
+                    title="Ver día anterior"
+                    className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer shrink-0"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+
+                  {/* Selector Central con Calendario integrado */}
+                  <label className="relative flex items-center justify-center gap-1.5 px-2 py-0.5 rounded-lg hover:bg-slate-100/70 transition-colors cursor-pointer group flex-1 min-w-0">
+                    <Calendar className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#0a5c36] transition-colors shrink-0" />
+                    <span className="text-xs font-black text-slate-700 truncate select-none">
+                      {formatGroupDate(selectedCompletedDate)}
+                    </span>
+                    <input
+                      type="date"
+                      value={selectedCompletedDate}
+                      max={getTodayDateString()}
+                      onChange={(e) => {
+                        if (e.target.value) setSelectedCompletedDate(e.target.value);
+                      }}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                      title="Haz clic para seleccionar fecha del calendario"
+                    />
+                  </label>
+
+                  {/* Acciones Rápidas: Botón Ayer / Hoy y Flecha Siguiente (>) */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {selectedCompletedDate === getTodayDateString() ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCompletedDate(getYesterdayDateString())}
+                        className="px-2 py-0.5 text-[10px] font-black text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-md transition-colors cursor-pointer"
+                        title="Ver camiones de Ayer"
+                      >
+                        Ayer
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCompletedDate(getTodayDateString())}
+                        className="px-2 py-0.5 text-[10px] font-black text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/90 rounded-md transition-colors cursor-pointer shadow-2xs"
+                        title="Volver al día de Hoy"
+                      >
+                        Hoy
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => shiftCompletedDate(1)}
+                      disabled={selectedCompletedDate >= getTodayDateString()}
+                      title="Ver día siguiente"
+                      className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-20 disabled:hover:bg-transparent disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
                 
-                <div className="space-y-6 flex-1 overflow-y-auto pr-1">
-                  {(() => {
-                    const grouped = getGroupedCompletedTrucks();
-                    const dates = Object.keys(grouped);
-
-                    if (dates.length === 0) {
-                      return <div className="text-center py-16 text-slate-400 text-sm font-semibold">Sin despachos hoy</div>;
-                    }
-
-                    return dates.map(dateStr => (
-                      <div key={dateStr} className="space-y-3">
-                        {/* Cabecera divisoria del día */}
-                        <div className="relative flex items-center justify-center my-4 select-none">
-                          <div className="absolute inset-0 flex items-center">
-                            <div className="w-full border-t border-slate-200/80"></div>
-                          </div>
-                          <span className="relative px-3 py-1 text-[9px] text-slate-500 font-extrabold uppercase bg-slate-100 rounded-full border border-slate-200 shadow-xs">
-                            {formatGroupDate(dateStr)}
-                          </span>
-                        </div>
-
-                        {/* Listado de tarjetas ultra-compactas de este día */}
-                        <div className="space-y-2">
-                          {grouped[dateStr].map(truck => {
-                            const compliance = checkExitCompliance(truck);
-                            return (
-                              <div 
-                                key={truck.id} 
-                                draggable={true}
-                                onDragStart={(e) => handleDragStart(e, truck.id, truck.status)}
-                                onClick={() => setSelectedTruckForTimeline(truck)}
-                                className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-emerald-400 p-3 rounded-2xl shadow-2xs hover:shadow-sm transition-all cursor-pointer flex items-center justify-between gap-3 group select-none opacity-95 hover:opacity-100 relative overflow-hidden"
-                                title="Haz clic para ver trazabilidad de tiempos y detalles"
-                              >
-                                <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                  <span className={`w-2 h-2 rounded-full shrink-0 ${compliance === 'A Tiempo' ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="font-extrabold text-xs text-slate-800 truncate group-hover:text-[#0a5c36]">
-                                        {truck.driver}
-                                      </span>
-                                      <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">
-                                        {truck.end_time ? new Date(truck.end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 mt-0.5">
-                                      <span className="font-mono text-[10px] font-extrabold bg-slate-100 px-1.5 py-0.2 rounded text-slate-700 border border-slate-200">
-                                        TR: {truck.tractor_plate || 'S/T'}
-                                      </span>
-                                      {truck.dock?.name && (
-                                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200/60">
-                                          {truck.dock.name}
-                                        </span>
-                                      )}
-                                      <span className="text-[10px] text-slate-400 font-semibold truncate">
-                                        • {truck.carrier}
-                                      </span>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleRevertStatus(truck);
-                                    }}
-                                    title="Regresar a Andén"
-                                    className="p-1 text-slate-300 hover:text-emerald-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                                  >
-                                    <RotateCcw className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleDeleteTruck(truck.id);
-                                    }}
-                                    title="Eliminar registro"
-                                    className="p-1 text-slate-300 hover:text-red-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                  <Activity className="w-4 h-4 text-slate-400 group-hover:text-[#0a5c36] transition-colors" />
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                {/* Lista de Tarjetas del Día Seleccionado */}
+                <div className="space-y-2 flex-1 overflow-y-auto pr-1">
+                  {completedTrucksForSelectedDate.length === 0 ? (
+                    <div className="text-center py-16 px-4 space-y-2 select-none">
+                      <div className="w-10 h-10 rounded-full bg-slate-200/70 text-slate-400 mx-auto flex items-center justify-center">
+                        <Clock className="w-5 h-5" />
                       </div>
-                    ));
-                  })()}
+                      <p className="text-slate-500 text-xs font-bold">
+                        {selectedCompletedDate === getTodayDateString()
+                          ? 'Sin camiones recibidos hoy'
+                          : selectedCompletedDate === getYesterdayDateString()
+                          ? 'Sin camiones recibidos ayer'
+                          : `Sin camiones recibidos el ${formatGroupDate(selectedCompletedDate)}`}
+                      </p>
+                      {selectedCompletedDate !== getTodayDateString() && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCompletedDate(getTodayDateString())}
+                          className="text-[11px] font-extrabold text-emerald-700 hover:text-emerald-800 underline cursor-pointer"
+                        >
+                          Volver a los recibidos de Hoy
+                        </button>
+                      )}
+                      {searchQuery.trim().length > 0 && (() => {
+                        const otherMatches = Object.entries(groupedCompletedTrucks)
+                          .filter(([d, arr]) => d !== selectedCompletedDate && arr.length > 0);
+                        if (otherMatches.length > 0) {
+                          return (
+                            <div className="pt-2 text-[11px] font-semibold text-slate-600">
+                              <p className="text-slate-400 text-[10px]">Coincidencias en otras fechas:</p>
+                              <div className="flex flex-wrap justify-center gap-1.5 mt-1.5">
+                                {otherMatches.map(([d, arr]) => (
+                                  <button
+                                    key={d}
+                                    type="button"
+                                    onClick={() => setSelectedCompletedDate(d)}
+                                    className="px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                                  >
+                                    {formatGroupDate(d)} ({arr.length})
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  ) : (
+                    completedTrucksForSelectedDate.map(truck => {
+                      const compliance = checkExitCompliance(truck);
+                      return (
+                        <div 
+                          key={truck.id} 
+                          draggable={true}
+                          onDragStart={(e) => handleDragStart(e, truck.id, truck.status)}
+                          onClick={() => setSelectedTruckForTimeline(truck)}
+                          className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-emerald-400 p-3 rounded-2xl shadow-2xs hover:shadow-sm transition-all cursor-pointer flex items-center justify-between gap-3 group select-none opacity-95 hover:opacity-100 relative overflow-hidden"
+                          title="Haz clic para ver trazabilidad de tiempos y detalles"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${compliance === 'A Tiempo' ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-extrabold text-xs text-slate-800 truncate group-hover:text-[#0a5c36]">
+                                  {truck.driver}
+                                </span>
+                                <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">
+                                  {truck.end_time ? new Date(truck.end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="font-mono text-[10px] font-extrabold bg-slate-100 px-1.5 py-0.2 rounded text-slate-700 border border-slate-200">
+                                  TR: {truck.tractor_plate || 'S/T'}
+                                </span>
+                                {truck.dock?.name && (
+                                  <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200/60">
+                                    {truck.dock.name}
+                                  </span>
+                                )}
+                                <span className="text-[10px] text-slate-400 font-semibold truncate">
+                                  • {truck.carrier}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRevertStatus(truck);
+                              }}
+                              title="Regresar a Andén"
+                              className="p-1 text-slate-300 hover:text-emerald-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteTruck(truck.id);
+                              }}
+                              title="Eliminar registro"
+                              className="p-1 text-slate-300 hover:text-red-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                            <Activity className="w-4 h-4 text-slate-400 group-hover:text-[#0a5c36] transition-colors" />
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
 
