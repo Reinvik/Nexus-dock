@@ -17,36 +17,56 @@ body {
   color: #0f172a; /* Slate-900 */
 }
 
+/* Ocultar en pantalla el documento imprimible montado en body */
+#printable-cargo-doc {
+  display: none;
+}
+
 @media print {
-  /* Ocultar toda la interfaz de la aplicación al imprimir */
-  body * {
-    visibility: hidden !important;
-  }
-
-  /* Solo mostrar el contenedor oficial de Control de Carga */
-  #printable-cargo-doc,
-  #printable-cargo-doc * {
-    visibility: visible !important;
-  }
-
-  #printable-cargo-doc {
-    position: fixed !important;
-    left: 0 !important;
-    top: 0 !important;
-    width: 100vw !important;
-    min-height: 100vh !important;
-    margin: 0 !important;
-    padding: 10mm 14mm !important;
-    background: #ffffff !important;
-    color: #000000 !important;
-    z-index: 9999999 !important;
-    -webkit-print-color-adjust: exact !important;
-    print-color-adjust: exact !important;
-    box-sizing: border-box !important;
-  }
-
   @page {
     size: letter portrait;
-    margin: 0;
+    margin: 8mm 10mm;
+  }
+
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    overflow: visible !important;
+  }
+
+  /* Ocultar toda la interfaz de la app React para que no genere altura ni hojas vacías */
+  body > *:not(#printable-cargo-doc) {
+    display: none !important;
+  }
+
+  /* Mostrar únicamente el documento oficial de Control de Carga en 1 sola hoja */
+  #printable-cargo-doc {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+  }
+
+  #printable-cargo-doc * {
+    visibility: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #printable-cargo-doc table {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 }

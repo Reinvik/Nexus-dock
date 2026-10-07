@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Calendar, 
   Clock, 
@@ -417,7 +418,7 @@ export function ControlDeCargaDocument({ data }: { data: CargoDocState }) {
             <td colSpan={2} rowSpan={4} className="border border-black px-2 py-2 text-center align-middle bg-slate-100">
               <span className="text-[10px] font-bold block text-slate-500 uppercase tracking-widest mb-1">N° Viaje / Vuelta</span>
               <div className="font-black text-5xl tracking-tight leading-none text-black">
-                {data.vuelta || '1°'}
+                {data.vuelta ? (data.vuelta.toString().endsWith('°') ? data.vuelta : `${data.vuelta}°`) : '1°'}
               </div>
             </td>
           </tr>
@@ -7996,22 +7997,42 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 {/* 7. Vueltas, Folios SAP y Supervisor */}
                 <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">N° de Viaje / Vuelta</label>
-                    <div className="flex gap-1.5">
-                      {['1°', '2°', '3°', '4°', '5°'].map(v => (
-                        <button
-                          key={v}
-                          type="button"
-                          onClick={() => setCargoDocData(prev => ({ ...prev, vuelta: v }))}
-                          className={`flex-1 py-1.5 rounded-xl text-xs font-black border transition-all cursor-pointer ${
-                            cargoDocData.vuelta === v 
-                              ? 'bg-cyan-600 text-white border-cyan-600 shadow-sm' 
-                              : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
-                          }`}
-                        >
-                          {v}
-                        </button>
-                      ))}
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase">N° de Viaje / Vuelta (Manual)</label>
+                      <span className="text-[10px] font-semibold text-slate-400">Hasta 25+ vueltas</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="Ej: 1, 2, ..., 25"
+                        value={cargoDocData.vuelta}
+                        onChange={(e) => setCargoDocData(prev => ({ ...prev, vuelta: e.target.value }))}
+                        className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm flex-1 font-black text-slate-800 focus:outline-none focus:border-cyan-600 focus:ring-1 focus:ring-cyan-600"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cleanNum = parseInt(cargoDocData.vuelta.replace(/\D/g, '') || '1', 10);
+                          const newNum = Math.max(1, cleanNum - 1);
+                          setCargoDocData(prev => ({ ...prev, vuelta: `${newNum}°` }));
+                        }}
+                        className="w-10 h-10 flex items-center justify-center bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 rounded-xl text-slate-700 font-black text-base transition-colors cursor-pointer"
+                        title="Disminuir vuelta (-1)"
+                      >
+                        -
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cleanNum = parseInt(cargoDocData.vuelta.replace(/\D/g, '') || '0', 10);
+                          const newNum = cleanNum + 1;
+                          setCargoDocData(prev => ({ ...prev, vuelta: `${newNum}°` }));
+                        }}
+                        className="w-10 h-10 flex items-center justify-center bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 rounded-xl text-slate-700 font-black text-base transition-colors cursor-pointer"
+                        title="Aumentar vuelta (+1)"
+                      >
+                        +
+                      </button>
                     </div>
                   </div>
 
@@ -8385,11 +8406,12 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         </div>
       )}
 
-      {/* Contenedor Exclusivo de Impresión (activado por @media print) */}
-      {showCargoDocModal && (
-        <div id="printable-cargo-doc" className="hidden print:block">
+      {/* Contenedor Exclusivo de Impresión (montado directo en body con createPortal para evitar que el DOM de la app genere páginas extra) */}
+      {showCargoDocModal && typeof document !== 'undefined' && createPortal(
+        <div id="printable-cargo-doc">
           <ControlDeCargaDocument data={cargoDocData} />
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
