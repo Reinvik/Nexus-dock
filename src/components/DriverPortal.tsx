@@ -53,6 +53,33 @@ interface YardOperation {
   } | null;
 }
 
+const calculateWaitTime = (entryTimeStr?: string | null, now: Date = new Date()) => {
+  if (!entryTimeStr) return { hours: 0, minutes: 0, seconds: 0, totalMinutes: 0, formatted: '00:00', text: '0 min', shortText: '0 min' };
+  const entryDate = new Date(entryTimeStr);
+  if (isNaN(entryDate.getTime())) return { hours: 0, minutes: 0, seconds: 0, totalMinutes: 0, formatted: '00:00', text: '0 min', shortText: '0 min' };
+  
+  const diffMs = Math.max(0, now.getTime() - entryDate.getTime());
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const formatted = hours > 0 
+    ? `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
+    : `${pad(minutes)}:${pad(seconds)}`;
+
+  const text = hours > 0 
+    ? `${hours}h ${minutes}m ${pad(seconds)}s` 
+    : `${minutes}m ${pad(seconds)}s`;
+
+  const shortText = hours > 0 
+    ? `${hours}h ${minutes}m` 
+    : `${minutes} min`;
+
+  return { hours, minutes, seconds, totalMinutes: Math.floor(totalSeconds / 60), formatted, text, shortText };
+};
+
 export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => void }) {
   const [activeStep, setActiveStep] = useState<'search' | 'monitor' | 'register_express' | 'select_duplicate'>('search');
   const [searchQuery, setSearchQuery] = useState('');
@@ -67,6 +94,15 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
   const [multipleActiveOps, setMultipleActiveOps] = useState<YardOperation[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [detectedTrip, setDetectedTrip] = useState<YardOperation | null>(null);
+  const [currentTime, setCurrentTime] = useState<Date>(new Date());
+
+  // Reloj en vivo para cronómetro de espera en ticket
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Alerta de duplicidad al registrar ingreso express
   const [duplicateExpressWarning, setDuplicateExpressWarning] = useState<{
@@ -823,7 +859,7 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
                         ) : (
                           <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-extrabold px-2.5 py-1 rounded-full">
                             <Clock className="w-3 h-3 text-blue-500" />
-                            EN ESPERA
+                            EN ESPERA · {calculateWaitTime(op.entry_time, currentTime).shortText}
                           </span>
                         )}
                       </div>
@@ -850,9 +886,16 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
                       </div>
                       <div>
                         <span className="text-[10px] text-slate-400 font-semibold block">Ingreso a Patio</span>
-                        <span className="font-bold text-slate-700 text-xs">
-                          {new Date(op.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-bold text-slate-700 text-xs">
+                            {new Date(op.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs
+                          </span>
+                          {op.status === 'espera' && (
+                            <span className="text-[9px] font-mono font-black text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.2 rounded">
+                              ⏱️ {calculateWaitTime(op.entry_time, currentTime).shortText}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1255,7 +1298,14 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
             {/* Cabecera del ticket monitoreado */}
             <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm flex items-center justify-between">
               <div className="space-y-0.5">
-                <p className="text-[10px] font-extrabold text-[#0a5c36] uppercase tracking-wider">Ticket en Monitoreo</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-[10px] font-extrabold text-[#0a5c36] uppercase tracking-wider">Ticket en Monitoreo</p>
+                  {activeOp.status === 'espera' && (
+                    <span className="text-[9px] font-mono font-black text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      ⏱️ {calculateWaitTime(activeOp.entry_time, currentTime).shortText}
+                    </span>
+                  )}
+                </div>
                 <h3 className="font-extrabold text-slate-800 text-sm">{activeOp.driver}</h3>
               </div>
               <div className="flex items-center gap-1.5">
@@ -1275,38 +1325,78 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
             {/* === LÓGICA DEL SEMÁFORO SEGÚN EL ESTADO === */}
             
             {/* CASO A: EN PATIO (ESPERA) */}
-            {activeOp.status === 'espera' && (
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-md text-center space-y-6">
-                
-                {/* Visualización Semáforo: Azul de Espera */}
-                <div className="flex justify-center gap-4 py-2">
-                  <div className="w-20 h-20 rounded-full bg-blue-50 border-4 border-blue-200 flex items-center justify-center shadow-inner relative">
-                    <span className="absolute inset-0 rounded-full border-2 border-blue-400 animate-ping opacity-35" />
-                    <Clock className="w-10 h-10 text-blue-600 animate-pulse" />
+            {activeOp.status === 'espera' && (() => {
+              const wait = calculateWaitTime(activeOp.entry_time, currentTime);
+              return (
+                <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-md text-center space-y-6">
+                  
+                  {/* Visualización Semáforo: Azul de Espera */}
+                  <div className="flex justify-center gap-4 py-2">
+                    <div className="w-20 h-20 rounded-full bg-blue-50 border-4 border-blue-200 flex items-center justify-center shadow-inner relative">
+                      <span className="absolute inset-0 rounded-full border-2 border-blue-400 animate-ping opacity-35" />
+                      <Clock className="w-10 h-10 text-blue-600 animate-pulse" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <span className="inline-block text-[10px] font-extrabold uppercase bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1 rounded-full tracking-wider">
+                      EN PATIO · ESPERA
+                    </span>
+                    <h3 className="text-lg font-extrabold text-slate-900 leading-tight">Espera de Andén</h3>
+                    <p className="text-xs font-semibold text-slate-500 leading-relaxed px-2">
+                      Tu llegada ha sido registrada en el patio de CiAL. Permanece atento a tu celular, te notificaremos por aquí cuando se te asigne un andén.
+                    </p>
+                  </div>
+
+                  {/* Contador de Tiempo de Espera en Vivo */}
+                  <div className="bg-gradient-to-b from-blue-50/70 to-slate-50 border border-blue-200 rounded-2xl p-4 shadow-xs space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-blue-800 text-[11px] font-black uppercase tracking-wider">
+                        <Clock className="w-3.5 h-3.5 text-blue-600 animate-spin" style={{ animationDuration: '8s' }} />
+                        <span>Tiempo de Espera en Patio</span>
+                      </div>
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-blue-700 bg-blue-100/80 px-2.5 py-0.5 rounded-full">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
+                        En vivo
+                      </span>
+                    </div>
+
+                    {/* Cronómetro Grande y Dinámico */}
+                    <div className="py-1">
+                      <div className="inline-flex items-baseline gap-1.5 bg-white px-5 py-2.5 rounded-2xl border border-blue-200 shadow-xs font-mono text-slate-900">
+                        {wait.hours > 0 && (
+                          <>
+                            <span className="text-3xl font-black">{wait.hours.toString().padStart(2, '0')}</span>
+                            <span className="text-xs font-bold text-slate-400 mr-1">h</span>
+                          </>
+                        )}
+                        <span className="text-3xl font-black">{wait.minutes.toString().padStart(2, '0')}</span>
+                        <span className="text-xs font-bold text-slate-400 mr-1">m</span>
+                        <span className="text-3xl font-black text-blue-600">{wait.seconds.toString().padStart(2, '0')}</span>
+                        <span className="text-xs font-bold text-blue-500">s</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-blue-100/80 px-1">
+                      <span className="font-medium">Ingreso registrado:</span>
+                      <strong className="text-slate-700 font-bold font-mono">
+                        {new Date(activeOp.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left space-y-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                      <MapPin className="w-4 h-4 text-[#0a5c36]" />
+                      <span>Zona de espera autorizada</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
+                      Mantén encendida la radio del camión y sigue las instrucciones de seguridad del personal del patio.
+                    </p>
                   </div>
                 </div>
-
-                <div className="space-y-2">
-                  <span className="inline-block text-[10px] font-extrabold uppercase bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1 rounded-full tracking-wider">
-                    EN PATIO · ESPERA
-                  </span>
-                  <h3 className="text-lg font-extrabold text-slate-900 leading-tight">Espera de Andén</h3>
-                  <p className="text-xs font-semibold text-slate-500 leading-relaxed px-2">
-                    Tu llegada ha sido registrada en el patio de CiAL. Permanece atento a tu celular, te notificaremos por aquí cuando se te asigne un andén.
-                  </p>
-                </div>
-
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left space-y-2">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-                    <MapPin className="w-4 h-4 text-[#0a5c36]" />
-                    <span>Zona de espera autorizada</span>
-                  </div>
-                  <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
-                    Mantén encendida la radio del camión y sigue las instrucciones de seguridad del personal del patio.
-                  </p>
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* CASO B: EN ANDÉN (ROJO - DETENERSE) */}
             {activeOp.status === 'anden' && (
@@ -1404,6 +1494,20 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
                     {dockName}
                   </p>
                 </div>
+                {activeOp.status === 'espera' && (
+                  <div className="col-span-2 bg-blue-50/70 p-3 rounded-2xl border border-blue-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-blue-900 font-black text-[11px] uppercase tracking-wider flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Tiempo de espera acumulado</span>
+                      </p>
+                      <p className="text-[10px] text-blue-700 font-medium">Contabilizado desde el ingreso al patio</p>
+                    </div>
+                    <span className="font-mono font-black text-xs text-blue-700 bg-white px-2.5 py-1 rounded-xl border border-blue-200 shadow-2xs">
+                      {calculateWaitTime(activeOp.entry_time, currentTime).text}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Botón de desvincular o retirar manualmente si se equivocó */}

@@ -3899,10 +3899,32 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                         </div>
                         <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
                         <p className="flex items-center gap-2"><Package className="w-4 h-4 text-slate-400" /> <span className="font-semibold text-slate-500">Carga:</span> <span className="text-slate-700 font-semibold">{truck.carrier}</span></p>
-                        <p className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-slate-400" /> 
-                          <span>Ingresó: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span>
-                        </p>
+                        <div className="flex items-center justify-between text-xs pt-0.5">
+                          <p className="flex items-center gap-1.5 text-slate-600">
+                            <Clock className="w-4 h-4 text-slate-400 shrink-0" /> 
+                            <span>Ingresó: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs</span>
+                          </p>
+                          {(() => {
+                            const diffMs = Math.max(0, currentTime.getTime() - new Date(truck.entry_time).getTime());
+                            const totalMins = Math.floor(diffMs / 60000);
+                            const h = Math.floor(totalMins / 60);
+                            const m = totalMins % 60;
+                            const waitLabel = h > 0 ? `${h}h ${m}m` : `${m} min`;
+                            const isLongWait = totalMins >= 60;
+                            return (
+                              <span 
+                                className={`font-mono text-[10px] font-black px-2 py-0.5 rounded-full border flex items-center gap-1 shrink-0 ${
+                                  isLongWait 
+                                    ? 'bg-amber-50 text-amber-800 border-amber-300 animate-pulse' 
+                                    : 'bg-blue-50 text-blue-700 border-blue-200'
+                                }`}
+                                title={`Tiempo transcurrido en espera: ${totalMins} minutos`}
+                              >
+                                ⏳ {waitLabel}
+                              </span>
+                            );
+                          })()}
+                        </div>
                         {truck.scheduled_entry_time && truck.scheduled_end_time && (
                           <p className="text-[10px] text-[#0a5c36] font-bold pl-6">
                             Citación: {new Date(truck.scheduled_entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} - {new Date(truck.scheduled_end_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
@@ -4764,8 +4786,32 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                               </a>
                             )}
                           </div>
-                          <p className="text-[10px] text-slate-400 pl-6">RUT: {truck.rut || 'N/A'} • Tel: {truck.phone || 'N/A'}</p>
-                          <p className="flex items-center gap-2"><Clock className="w-4 h-4 text-emerald-600" /> <span>Llegada Patio: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span></p>
+                          <div className="flex items-center justify-between text-xs pt-0.5">
+                            <p className="flex items-center gap-1.5 text-slate-600">
+                              <Clock className="w-4 h-4 text-emerald-600 shrink-0" /> 
+                              <span>Llegada Patio: {new Date(truck.entry_time).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs</span>
+                            </p>
+                            {truck.status === 'espera' && (() => {
+                              const diffMs = Math.max(0, currentTime.getTime() - new Date(truck.entry_time).getTime());
+                              const totalMins = Math.floor(diffMs / 60000);
+                              const h = Math.floor(totalMins / 60);
+                              const m = totalMins % 60;
+                              const waitLabel = h > 0 ? `${h}h ${m}m` : `${m} min`;
+                              const isLongWait = totalMins >= 60;
+                              return (
+                                <span 
+                                  className={`font-mono text-[10px] font-black px-2 py-0.5 rounded-full border flex items-center gap-1 shrink-0 ${
+                                    isLongWait 
+                                      ? 'bg-amber-50 text-amber-800 border-amber-300 animate-pulse' 
+                                      : 'bg-blue-50 text-blue-700 border-blue-200'
+                                  }`}
+                                  title={`Tiempo transcurrido en espera: ${totalMins} minutos`}
+                                >
+                                  ⏳ {waitLabel}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </div>
 
                         <div className="pt-2 border-t border-slate-100 space-y-1.5">
@@ -7030,14 +7076,21 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                           : 'En tránsito o pendiente de llegada'}
                       </div>
                     </div>
-                    {selectedTruckForTimeline.start_time && (
+                    {selectedTruckForTimeline.start_time ? (
                       <div className="text-right">
                         <span className="text-[10px] text-emerald-700 font-bold block">Tiempo Espera Patio</span>
                         <span className="text-xs font-black text-emerald-900">
                           {formatDurationMs(new Date(selectedTruckForTimeline.start_time).getTime() - new Date(selectedTruckForTimeline.entry_time).getTime())}
                         </span>
                       </div>
-                    )}
+                    ) : selectedTruckForTimeline.status === 'espera' ? (
+                      <div className="text-right">
+                        <span className="text-[10px] text-blue-700 font-bold block">Tiempo Actual en Espera</span>
+                        <span className="text-xs font-black text-blue-900 font-mono">
+                          ⏳ {formatDurationMs(currentTime.getTime() - new Date(selectedTruckForTimeline.entry_time).getTime())}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
