@@ -75,6 +75,7 @@ import {
   isBackgroundPatioModeActive,
   toggleBackgroundPatioMode
 } from './utils/notifications';
+import { EfficiencyCycleReport } from './components/EfficiencyCycleReport';
 
 export const OWNER_EMAILS = ['ariel.mella@cial.cl'];
 
@@ -803,6 +804,9 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [historyOpType, setHistoryOpType] = useState<string>('todos');
   const [historyCargoType, setHistoryCargoType] = useState<string>('todos');
 
+  // States para Reportes de Eficiencia
+  const [reportsSubTab, setReportsSubTab] = useState<'cycles' | 'yard_overview'>('cycles');
+
   // States para Modificar Contraseña
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [newPassword, setNewPassword] = useState('');
@@ -1326,7 +1330,10 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         console.warn('Error menor al cargar schedule_recurring_rules:', e);
       }
 
-      setDocks(docksData || []);
+      const sortedDocks = (docksData || []).slice().sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+      );
+      setDocks(sortedDocks);
       setTrucks(operationsData || []);
       setDrivers(driversData || []);
       setVehicles(vehiclesData || []);
@@ -4985,7 +4992,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
 
               {/* Matriz / Grid de Horas y Andenes */}
               <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
-                <table className="w-full min-w-[800px] border-collapse table-fixed">
+                <table className="w-full min-w-[1400px] border-collapse table-fixed">
                   <thead>
                     <tr className="bg-slate-50 text-slate-600 text-xs font-extrabold border-b border-slate-200">
                       <th className="w-24 p-3 border-r border-slate-200 text-center uppercase tracking-wider font-extrabold bg-slate-100">Hora</th>
@@ -5459,216 +5466,268 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             /* ====================================================
                PESTAÑA: REPORTES DE EFICIENCIA
                ==================================================== */
-            (() => {
-              const total = trucks.length;
-              const completados = trucks.filter(t => t.status === 'completado');
-              const enAndenes = trucks.filter(t => t.status === 'anden');
-              const enPatio   = trucks.filter(t => t.status === 'espera');
-              const citasHoy  = trucks.filter(t => t.status === 'cita');
-
-              // Tiempo promedio en andén (minutos)
-              const tiemposAnden = completados
-                .filter(t => t.end_time && t.scheduled_entry_time)
-                .map(t => (new Date(t.end_time!).getTime() - new Date(t.scheduled_entry_time!).getTime()) / 60000);
-              const avgAnden = tiemposAnden.length > 0
-                ? Math.round(tiemposAnden.reduce((a, b) => a + b, 0) / tiemposAnden.length)
-                : null;
-
-              const cargas    = trucks.filter(t => t.type === 'Carga').length;
-              const descargas = trucks.filter(t => t.type === 'Descarga').length;
-
-              const cargaDist: Record<string, number> = {};
-              trucks.forEach(t => { const k = t.carrier || 'Sin definir'; cargaDist[k] = (cargaDist[k] || 0) + 1; });
-
-              const now = new Date();
-              const days7: { label: string; count: number }[] = [];
-              for (let i = 6; i >= 0; i--) {
-                const d = new Date(now); d.setDate(d.getDate() - i);
-                const label = d.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' });
-                const count = trucks.filter(t => {
-                  const td = new Date(t.entry_time);
-                  return td.getDate() === d.getDate() && td.getMonth() === d.getMonth() && td.getFullYear() === d.getFullYear();
-                }).length;
-                days7.push({ label, count });
-              }
-              const maxDay = Math.max(...days7.map(d => d.count), 1);
-
-              const docksOcupados = docks.filter(d => d.status === 'Ocupado').length;
-              const docksPct = docks.length > 0 ? Math.round((docksOcupados / docks.length) * 100) : 0;
-
-              const dockRotation: Record<string, number> = {};
-              completados.forEach(t => { if (t.dock_id) { dockRotation[t.dock_id] = (dockRotation[t.dock_id] || 0) + 1; } });
-              const topDocks = Object.entries(dockRotation).sort((a, b) => b[1] - a[1]).slice(0, 5);
-
-              return (
-                <section className="space-y-5">
-                  {/* Header */}
-                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                    <h2 className="text-xl font-extrabold text-slate-900">Reportes de Eficiencia</h2>
-                    <p className="text-xs text-slate-500 font-semibold mt-0.5">Métricas operativas en tiempo real · Datos del historial completo</p>
+            <section className="space-y-6">
+              {/* Encabezado y Selector de Módulos de Eficiencia */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="p-2 bg-emerald-50 text-[#0a5c36] rounded-xl border border-emerald-100">
+                      <BarChart3 className="w-5 h-5" />
+                    </span>
+                    <div>
+                      <h2 className="text-xl font-black text-slate-900 tracking-tight">Reportes de Eficiencia</h2>
+                      <p className="text-xs text-slate-500 font-semibold mt-0.5">
+                        Métricas operativas en tiempo real · Evolución de tiempos medios por semana y control de patio
+                      </p>
+                    </div>
                   </div>
+                </div>
 
-                  {/* KPI Cards */}
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    {[
-                      { label: 'Total Operaciones', value: total, sub: 'en el sistema', icon: <Truck className="w-5 h-5" />, color: 'from-[#0a5c36] to-emerald-600' },
-                      { label: 'Completados', value: completados.length, sub: `${total > 0 ? Math.round(completados.length/total*100) : 0}% del total`, icon: <CheckCircle className="w-5 h-5" />, color: 'from-emerald-400 to-teal-500' },
-                      { label: 'En Andén Ahora', value: enAndenes.length, sub: `${docksPct}% ocupación andenes`, icon: <Package className="w-5 h-5" />, color: 'from-purple-500 to-violet-600' },
-                      { label: 'Tiempo Prom. Andén', value: avgAnden !== null ? `${avgAnden} min` : 'N/A', sub: avgAnden !== null ? (avgAnden <= 15 ? '✓ Dentro del estándar (15 min)' : `⚠ Sobre estándar (+${avgAnden-15} min)`) : 'Sin datos suficientes', icon: <Clock className="w-5 h-5" />, color: avgAnden !== null && avgAnden > 15 ? 'from-orange-400 to-red-500' : 'from-sky-400 to-blue-600' },
-                    ].map((kpi, i) => (
-                      <div key={i} className={`rounded-2xl bg-gradient-to-br ${kpi.color} p-5 shadow-md flex flex-col gap-2`}>
-                        <div className="flex items-center justify-between">
-                          <span className="text-white/80 text-[10px] font-extrabold uppercase tracking-wider">{kpi.label}</span>
-                          <span className="text-white/70">{kpi.icon}</span>
-                        </div>
-                        <p className="text-3xl font-extrabold text-white">{kpi.value}</p>
-                        <p className="text-[10px] text-white/70 font-semibold">{kpi.sub}</p>
-                      </div>
-                    ))}
-                  </div>
+                {/* Sub-tabs Selector */}
+                <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200/80 self-start md:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setReportsSubTab('cycles')}
+                    className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                      reportsSubTab === 'cycles'
+                        ? 'bg-[#0a5c36] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    }`}
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Tiempos Medios & Semanas</span>
+                  </button>
 
-                  {/* Gráfico barras 7 días + Donut operaciones */}
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                      <h3 className="font-extrabold text-sm text-slate-800 mb-1">Operaciones por Día</h3>
-                      <p className="text-[10px] text-slate-400 font-semibold mb-4">Últimos 7 días</p>
-                      <div className="flex items-end gap-2 h-36">
-                        {days7.map((d, i) => (
-                          <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                            <span className="text-[9px] font-bold text-slate-500">{d.count > 0 ? d.count : ''}</span>
-                            <div
-                              className="w-full rounded-t-lg bg-gradient-to-t from-[#0a5c36] to-emerald-400 transition-all duration-500"
-                              style={{ height: `${Math.max(Math.round((d.count / maxDay) * 100), d.count > 0 ? 4 : 1)}%`, opacity: d.count > 0 ? 1 : 0.15 }}
-                            />
-                            <span className="text-[9px] font-bold text-slate-400 whitespace-nowrap">{d.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => setReportsSubTab('yard_overview')}
+                    className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                      reportsSubTab === 'yard_overview'
+                        ? 'bg-[#0a5c36] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    }`}
+                  >
+                    <Building2 className="w-3.5 h-3.5" />
+                    <span>Visión General de Patio</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Sub-tab 1: Tiempos de Ciclo & Evolución Semana a Semana */}
+              {reportsSubTab === 'cycles' ? (
+                <EfficiencyCycleReport
+                  trucks={trucks}
+                  docks={docks}
+                  drivers={drivers}
+                />
+              ) : (
+                /* Sub-tab 2: Visión General de Patio & Andenes (Vista Clásica) */
+                (() => {
+                  const total = trucks.length;
+                  const completados = trucks.filter(t => t.status === 'completado');
+                  const enAndenes = trucks.filter(t => t.status === 'anden');
+                  const enPatio   = trucks.filter(t => t.status === 'espera');
+                  const citasHoy  = trucks.filter(t => t.status === 'cita');
+
+                  // Tiempo promedio en andén (minutos)
+                  const tiemposAnden = completados
+                    .filter(t => t.end_time && t.scheduled_entry_time)
+                    .map(t => (new Date(t.end_time!).getTime() - new Date(t.scheduled_entry_time!).getTime()) / 60000);
+                  const avgAnden = tiemposAnden.length > 0
+                    ? Math.round(tiemposAnden.reduce((a, b) => a + b, 0) / tiemposAnden.length)
+                    : null;
+
+                  const cargas    = trucks.filter(t => t.type === 'Carga').length;
+                  const descargas = trucks.filter(t => t.type === 'Descarga').length;
+
+                  const cargaDist: Record<string, number> = {};
+                  trucks.forEach(t => { const k = t.carrier || 'Sin definir'; cargaDist[k] = (cargaDist[k] || 0) + 1; });
+
+                  const now = new Date();
+                  const days7: { label: string; count: number }[] = [];
+                  for (let i = 6; i >= 0; i--) {
+                    const d = new Date(now); d.setDate(d.getDate() - i);
+                    const label = d.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' });
+                    const count = trucks.filter(t => {
+                      const td = new Date(t.entry_time);
+                      return td.getDate() === d.getDate() && td.getMonth() === d.getMonth() && td.getFullYear() === d.getFullYear();
+                    }).length;
+                    days7.push({ label, count });
+                  }
+                  const maxDay = Math.max(...days7.map(d => d.count), 1);
+
+                  const docksOcupados = docks.filter(d => d.status === 'Ocupado').length;
+                  const docksPct = docks.length > 0 ? Math.round((docksOcupados / docks.length) * 100) : 0;
+
+                  const dockRotation: Record<string, number> = {};
+                  completados.forEach(t => { if (t.dock_id) { dockRotation[t.dock_id] = (dockRotation[t.dock_id] || 0) + 1; } });
+                  const topDocks = Object.entries(dockRotation).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+                  return (
+                    <div className="space-y-5">
+                      {/* KPI Cards */}
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                        {[
+                          { label: 'Total Operaciones', value: total, sub: 'en el sistema', icon: <Truck className="w-5 h-5" />, color: 'from-[#0a5c36] to-emerald-600' },
+                          { label: 'Completados', value: completados.length, sub: `${total > 0 ? Math.round(completados.length/total*100) : 0}% del total`, icon: <CheckCircle className="w-5 h-5" />, color: 'from-emerald-400 to-teal-500' },
+                          { label: 'En Andén Ahora', value: enAndenes.length, sub: `${docksPct}% ocupación andenes`, icon: <Package className="w-5 h-5" />, color: 'from-purple-500 to-violet-600' },
+                          { label: 'Tiempo Prom. Andén', value: avgAnden !== null ? `${avgAnden} min` : 'N/A', sub: avgAnden !== null ? (avgAnden <= 15 ? '✓ Dentro del estándar (15 min)' : `⚠ Sobre estándar (+${avgAnden-15} min)`) : 'Sin datos suficientes', icon: <Clock className="w-5 h-5" />, color: avgAnden !== null && avgAnden > 15 ? 'from-orange-400 to-red-500' : 'from-sky-400 to-blue-600' },
+                        ].map((kpi, i) => (
+                          <div key={i} className={`rounded-2xl bg-gradient-to-br ${kpi.color} p-5 shadow-md flex flex-col gap-2`}>
+                            <div className="flex items-center justify-between">
+                              <span className="text-white/80 text-[10px] font-extrabold uppercase tracking-wider">{kpi.label}</span>
+                              <span className="text-white/70">{kpi.icon}</span>
+                            </div>
+                            <p className="text-3xl font-extrabold text-white">{kpi.value}</p>
+                            <p className="text-[10px] text-white/70 font-semibold">{kpi.sub}</p>
                           </div>
                         ))}
                       </div>
-                    </div>
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col">
-                      <h3 className="font-extrabold text-sm text-slate-800 mb-1">Tipo de Operación</h3>
-                      <p className="text-[10px] text-slate-400 font-semibold mb-4">Carga vs Descarga</p>
-                      <div className="flex-1 flex flex-col justify-center gap-4">
-                        {[
-                          { label: 'Descarga', value: descargas, color: 'bg-orange-400' },
-                          { label: 'Carga', value: cargas, color: 'bg-emerald-500' },
-                        ].map(op => {
-                          const pct = total > 0 ? Math.round((op.value / total) * 100) : 0;
-                          return (
-                            <div key={op.label}>
-                              <div className="flex justify-between text-xs font-bold text-slate-600 mb-1.5">
-                                <span>{op.label}</span>
-                                <span>{op.value} ({pct}%)</span>
-                              </div>
-                              <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                                <div className={`h-full ${op.color} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* Estado actual + Tipo carga + Top andenes */}
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                      <h3 className="font-extrabold text-sm text-slate-800 mb-4">Estado Actual del Patio</h3>
-                      <div className="space-y-3">
-                        {[
-                          { label: 'Citas Pendientes', value: citasHoy.length, dot: 'bg-yellow-400', text: 'text-yellow-700' },
-                          { label: 'En Patio', value: enPatio.length, dot: 'bg-blue-400', text: 'text-blue-700' },
-                          { label: 'En Andén', value: enAndenes.length, dot: 'bg-purple-400', text: 'text-purple-700' },
-                          { label: 'Completados', value: completados.length, dot: 'bg-emerald-400', text: 'text-emerald-700' },
-                        ].map(s => (
-                          <div key={s.label} className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className={`w-2.5 h-2.5 rounded-full ${s.dot}`} />
-                              <span className="text-xs font-semibold text-slate-600">{s.label}</span>
-                            </div>
-                            <span className={`text-sm font-extrabold ${s.text}`}>{s.value}</span>
+                      {/* Gráfico barras 7 días + Donut operaciones */}
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                          <h3 className="font-extrabold text-sm text-slate-800 mb-1">Operaciones por Día</h3>
+                          <p className="text-[10px] text-slate-400 font-semibold mb-4">Últimos 7 días</p>
+                          <div className="flex items-end gap-2 h-36">
+                            {days7.map((d, i) => (
+                              <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                                <span className="text-[9px] font-bold text-slate-500">{d.count > 0 ? d.count : ''}</span>
+                                <div
+                                  className="w-full rounded-t-lg bg-gradient-to-t from-[#0a5c36] to-emerald-400 transition-all duration-500"
+                                  style={{ height: `${Math.max(Math.round((d.count / maxDay) * 100), d.count > 0 ? 4 : 1)}%`, opacity: d.count > 0 ? 1 : 0.15 }}
+                                />
+                                <span className="text-[9px] font-bold text-slate-400 whitespace-nowrap">{d.label}</span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                      <div className="mt-4 pt-3 border-t border-slate-100">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-500">Andenes Ocupados</span>
-                          <span className="font-extrabold text-slate-800">{docksOcupados} / {docks.length}</span>
                         </div>
-                        <div className="mt-2 h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-[#0a5c36] to-emerald-400 rounded-full transition-all duration-700" style={{ width: `${docksPct}%` }} />
-                        </div>
-                        <p className="text-[10px] text-slate-400 font-semibold mt-1 text-right">{docksPct}% de ocupación</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                      <h3 className="font-extrabold text-sm text-slate-800 mb-4">Tipos de Carga</h3>
-                      <div className="space-y-3">
-                        {Object.entries(cargaDist).sort((a, b) => b[1] - a[1]).map(([label, count], idx) => {
-                          const colors = ['bg-sky-400','bg-violet-400','bg-pink-400','bg-amber-400','bg-teal-400'];
-                          const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-                          return (
-                            <div key={label}>
-                              <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                <span>{label}</span><span>{count} ({pct}%)</span>
-                              </div>
-                              <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div className={`h-full ${colors[idx % colors.length]} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                        {Object.keys(cargaDist).length === 0 && <p className="text-xs text-slate-400 font-semibold text-center py-4">Sin datos</p>}
-                      </div>
-                    </div>
-
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                      <h3 className="font-extrabold text-sm text-slate-800 mb-4">Rotación por Andén</h3>
-                      <p className="text-[10px] text-slate-400 font-semibold mb-3">Operaciones completadas acumuladas</p>
-                      <div className="space-y-3">
-                        {topDocks.length === 0 ? (
-                          <p className="text-xs text-slate-400 font-semibold text-center py-4">Sin operaciones completadas</p>
-                        ) : topDocks.map(([dockId, count], idx) => {
-                          const dockName = docks.find(d => d.id === dockId)?.name || 'Andén';
-                          const maxRot = topDocks[0][1];
-                          return (
-                            <div key={dockId}>
-                              <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                <span>#{idx+1} {dockName}</span>
-                                <span className="text-[#0a5c36] font-extrabold">{count} ops</span>
-                              </div>
-                              <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div className="h-full bg-gradient-to-r from-[#0a5c36] to-emerald-400 rounded-full transition-all duration-700" style={{ width: `${Math.round((count/maxRot)*100)}%` }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Mapa estado andenes */}
-                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                    <h3 className="font-extrabold text-sm text-slate-800 mb-4">Mapa de Estado de Andenes</h3>
-                    <div className="flex flex-wrap gap-3">
-                      {docks.map(dock => {
-                        const activeTruck = trucks.find(t => t.dock_id === dock.id && t.status === 'anden');
-                        const isOcupado = dock.status === 'Ocupado';
-                        return (
-                          <div key={dock.id} className={`flex flex-col items-center justify-center w-24 h-24 rounded-2xl border-2 shadow-sm transition-all ${isOcupado ? 'bg-purple-50 border-purple-300' : 'bg-emerald-50 border-emerald-200'}`}>
-                            <span className={`text-[10px] font-extrabold uppercase tracking-wider ${isOcupado ? 'text-purple-600' : 'text-emerald-600'}`}>{dock.name}</span>
-                            <span className={`mt-1 text-[9px] font-bold ${isOcupado ? 'text-purple-500' : 'text-emerald-500'}`}>{isOcupado ? '● Ocupado' : '○ Libre'}</span>
-                            {activeTruck && <span className="text-[8px] text-purple-400 font-semibold mt-0.5 text-center leading-tight px-1">{activeTruck.tractor_plate}</span>}
+                        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col">
+                          <h3 className="font-extrabold text-sm text-slate-800 mb-1">Tipo de Operación</h3>
+                          <p className="text-[10px] text-slate-400 font-semibold mb-4">Carga vs Descarga</p>
+                          <div className="flex-1 flex flex-col justify-center gap-4">
+                            {[
+                              { label: 'Descarga', value: descargas, color: 'bg-orange-400' },
+                              { label: 'Carga', value: cargas, color: 'bg-emerald-500' },
+                            ].map(op => {
+                              const pct = total > 0 ? Math.round((op.value / total) * 100) : 0;
+                              return (
+                                <div key={op.label}>
+                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1.5">
+                                    <span>{op.label}</span>
+                                    <span>{op.value} ({pct}%)</span>
+                                  </div>
+                                  <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                                    <div className={`h-full ${op.color} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
-                        );
-                      })}
-                      {docks.length === 0 && <p className="text-xs text-slate-400 font-semibold">Sin andenes configurados</p>}
+                        </div>
+                      </div>
+
+                      {/* Estado actual + Tipo carga + Top andenes */}
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                          <h3 className="font-extrabold text-sm text-slate-800 mb-4">Estado Actual del Patio</h3>
+                          <div className="space-y-3">
+                            {[
+                              { label: 'Citas Pendientes', value: citasHoy.length, dot: 'bg-yellow-400', text: 'text-yellow-700' },
+                              { label: 'En Patio', value: enPatio.length, dot: 'bg-blue-400', text: 'text-blue-700' },
+                              { label: 'En Andén', value: enAndenes.length, dot: 'bg-purple-400', text: 'text-purple-700' },
+                              { label: 'Completados', value: completados.length, dot: 'bg-emerald-400', text: 'text-emerald-700' },
+                            ].map(s => (
+                              <div key={s.label} className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className={`w-2.5 h-2.5 rounded-full ${s.dot}`} />
+                                  <span className="text-xs font-semibold text-slate-600">{s.label}</span>
+                                </div>
+                                <span className={`text-sm font-extrabold ${s.text}`}>{s.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-4 pt-3 border-t border-slate-100">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-slate-500">Andenes Ocupados</span>
+                              <span className="font-extrabold text-slate-800">{docksOcupados} / {docks.length}</span>
+                            </div>
+                            <div className="mt-2 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full bg-gradient-to-r from-[#0a5c36] to-emerald-400 rounded-full transition-all duration-700" style={{ width: `${docksPct}%` }} />
+                            </div>
+                            <p className="text-[10px] text-slate-400 font-semibold mt-1 text-right">{docksPct}% de ocupación</p>
+                          </div>
+                        </div>
+
+                        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                          <h3 className="font-extrabold text-sm text-slate-800 mb-4">Tipos de Carga</h3>
+                          <div className="space-y-3">
+                            {Object.entries(cargaDist).sort((a, b) => b[1] - a[1]).map(([label, count], idx) => {
+                              const colors = ['bg-sky-400','bg-violet-400','bg-pink-400','bg-amber-400','bg-teal-400'];
+                              const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+                              return (
+                                <div key={label}>
+                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                                    <span>{label}</span><span>{count} ({pct}%)</span>
+                                  </div>
+                                  <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                                    <div className={`h-full ${colors[idx % colors.length]} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            {Object.keys(cargaDist).length === 0 && <p className="text-xs text-slate-400 font-semibold text-center py-4">Sin datos</p>}
+                          </div>
+                        </div>
+
+                        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                          <h3 className="font-extrabold text-sm text-slate-800 mb-4">Rotación por Andén</h3>
+                          <p className="text-[10px] text-slate-400 font-semibold mb-3">Operaciones completadas acumuladas</p>
+                          <div className="space-y-3">
+                            {topDocks.length === 0 ? (
+                              <p className="text-xs text-slate-400 font-semibold text-center py-4">Sin operaciones completadas</p>
+                            ) : topDocks.map(([dockId, count], idx) => {
+                              const dockName = docks.find(d => d.id === dockId)?.name || 'Andén';
+                              const maxRot = topDocks[0][1];
+                              return (
+                                <div key={dockId}>
+                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                                    <span>#{idx+1} {dockName}</span>
+                                    <span className="text-[#0a5c36] font-extrabold">{count} ops</span>
+                                  </div>
+                                  <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-gradient-to-r from-[#0a5c36] to-emerald-400 rounded-full transition-all duration-700" style={{ width: `${Math.round((count/maxRot)*100)}%` }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Mapa estado andenes */}
+                      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                        <h3 className="font-extrabold text-sm text-slate-800 mb-4">Mapa de Estado de Andenes</h3>
+                        <div className="flex flex-wrap gap-3">
+                          {docks.map(dock => {
+                            const activeTruck = trucks.find(t => t.dock_id === dock.id && t.status === 'anden');
+                            const isOcupado = dock.status === 'Ocupado';
+                            return (
+                              <div key={dock.id} className={`flex flex-col items-center justify-center w-24 h-24 rounded-2xl border-2 shadow-sm transition-all ${isOcupado ? 'bg-purple-50 border-purple-300' : 'bg-emerald-50 border-emerald-200'}`}>
+                                <span className={`text-[10px] font-extrabold uppercase tracking-wider ${isOcupado ? 'text-purple-600' : 'text-emerald-600'}`}>{dock.name}</span>
+                                <span className={`mt-1 text-[9px] font-bold ${isOcupado ? 'text-purple-500' : 'text-emerald-500'}`}>{isOcupado ? '● Ocupado' : '○ Libre'}</span>
+                                {activeTruck && <span className="text-[8px] text-purple-400 font-semibold mt-0.5 text-center leading-tight px-1">{activeTruck.tractor_plate}</span>}
+                              </div>
+                            );
+                          })}
+                          {docks.length === 0 && <p className="text-xs text-slate-400 font-semibold">Sin andenes configurados</p>}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </section>
-              );
-            })()
+                  );
+                })()
+              )}
+            </section>
 
           ) : activeTab === 'users' ? (
             /* ====================================================
@@ -7213,7 +7272,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   onChange={(e) => setRestrictionDockId(e.target.value)}
                   className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm w-full text-slate-800 font-bold focus:outline-none focus:border-[#0a5c36] focus:bg-white cursor-pointer"
                 >
-                  <option value="todos">🌟 Todos los Andenes (1 al {docks.length || 5})</option>
+                  <option value="todos">🌟 Todos los Andenes ({docks.length} andenes)</option>
                   {docks.map(d => (
                     <option key={d.id} value={d.id}>{d.name} ({d.status})</option>
                   ))}
@@ -7684,7 +7743,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                         onChange={(e) => handleSaveLunchConfig({ ...lunchBreakConfig, docks: e.target.value })}
                         className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs w-full font-bold text-slate-700 focus:outline-none focus:border-[#0a5c36]"
                       >
-                        <option value="todos">🌟 Todos los Andenes (1 al {docks.length || 5})</option>
+                        <option value="todos">🌟 Todos los Andenes ({docks.length} andenes)</option>
                         {docks.map(d => (
                           <option key={d.id} value={d.id}>{d.name}</option>
                         ))}
