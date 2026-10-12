@@ -56,7 +56,8 @@ import {
   Volume2,
   VolumeX,
   Smartphone,
-  AlertTriangle
+  AlertTriangle,
+  QrCode
 } from 'lucide-react';
 import { supabase, supabaseMain, activeSchema } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -76,6 +77,14 @@ import {
   toggleBackgroundPatioMode
 } from './utils/notifications';
 import { EfficiencyCycleReport } from './components/EfficiencyCycleReport';
+import { QrDockManager, QrDockReleaseModal } from './components/QrDockManager';
+import { TelegramAlertsManager } from './components/TelegramAlertsManager';
+import {
+  type TelegramConfig,
+  DEFAULT_TELEGRAM_RULES,
+  fetchTelegramConfig,
+  dispatchTelegramAlert
+} from './lib/telegram';
 
 export const OWNER_EMAILS = ['ariel.mella@cial.cl'];
 
@@ -587,7 +596,34 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
 
   const isNexusOwner = isUserOwner(currentUser?.email);
 
-  const [activeTab, setActiveTab] = useState<'yard' | 'planta2' | 'scheduler' | 'history' | 'reports' | 'users'>('yard');
+  const [activeTab, setActiveTab] = useState<'yard' | 'planta2' | 'scheduler' | 'history' | 'reports' | 'qr_docks' | 'telegram' | 'users'>('yard');
+
+  const [qrReleaseDockId, setQrReleaseDockId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('qr_release_dock');
+  });
+
+  const handleCloseQrModal = () => {
+    setQrReleaseDockId(null);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('qr_release_dock');
+      window.history.replaceState({}, '', url.toString());
+    }
+  };
+
+  const [telegramConfig, setTelegramConfig] = useState<TelegramConfig>({
+    id: 'default',
+    bot_token: '',
+    enabled: true,
+    accounts: [],
+    rules: { ...DEFAULT_TELEGRAM_RULES },
+  });
+
+  useEffect(() => {
+    fetchTelegramConfig().then(setTelegramConfig);
+  }, []);
 
   // Redirigir fuera de la pestaña de usuarios si el usuario conectado no es Nexus Owner
   useEffect(() => {
@@ -1074,6 +1110,100 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       }
     });
   }, [trucks, currentTime]);
+
+  // 4. 🤖 Alertas Programables de Telegram (Espera prolongada en patio y Exceso en andén)
+  const initialTgTimersRecorded = useRef(false);
+  useEffect(() => {
+    if (!telegramConfig.enabled || !telegramConfig.bot_token || trucks.length === 0) return;
+
+    const STORAGE_KEY = 'nexus_tg_timer_alerts_sent';
+    let sentSet = new Set<string>();
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) sentSet = new Set(JSON.parse(raw));
+    } catch {
+      // ignore
+    }
+
+    const nowMs = Date.now();
+    const waitLimitMins = telegramConfig.rules.long_wait_patio_minutes || 45;
+    const dockLimitMins = telegramConfig.rules.long_dock_stay_minutes || 90;
+
+    // En la primera carga, marcar los que ya superaron el umbral para evitar ráfagas antiguas
+    if (!initialTgTimersRecorded.current) {
+      let modified = false;
+      trucks.forEach(t => {
+        if (t.status === 'espera' && t.entry_time) {
+          const mins = Math.floor((nowMs - new Date(t.entry_time).getTime()) / 60000);
+          if (mins >= waitLimitMins) {
+            sentSet.add(`wait-${t.id}-${waitLimitMins}`);
+            modified = true;
+          }
+        }
+        if (t.status === 'anden' && (t.start_time || t.entry_time)) {
+          const mins = Math.floor((nowMs - new Date(t.start_time || t.entry_time).getTime()) / 60000);
+          if (mins >= dockLimitMins) {
+            sentSet.add(`dock-${t.id}-${dockLimitMins}`);
+            modified = true;
+          }
+        }
+      });
+      if (modified) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(sentSet).slice(-200)));
+      }
+      initialTgTimersRecorded.current = true;
+      return;
+    }
+
+    // Evaluar camiones en espera en patio
+    if (telegramConfig.rules.on_long_wait_patio) {
+      trucks
+        .filter(t => t.status === 'espera' && t.entry_time)
+        .forEach(t => {
+          const mins = Math.floor((nowMs - new Date(t.entry_time).getTime()) / 60000);
+          const alertKey = `wait-${t.id}-${waitLimitMins}`;
+          if (mins >= waitLimitMins && mins < 720 && !sentSet.has(alertKey)) {
+            sentSet.add(alertKey);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(sentSet).slice(-200)));
+            const plate = t.tractor_plate || t.patent || 'S/P';
+            const msg = [
+              `⏰ <b>ALERTA: ESPERA PROLONGADA EN PATIO</b>`,
+              `🚛 <b>Camión:</b> <code>${plate}</code>${t.trailer_plate ? ` / R: <code>${t.trailer_plate}</code>` : ''}`,
+              `👤 <b>Chofer:</b> ${t.driver}`,
+              `⏳ <b>Tiempo Esperando:</b> ${mins} min (Límite configurado: ${waitLimitMins} min)`,
+              `📦 <b>Operación:</b> ${t.type} · ${t.carrier}`,
+            ].join('\n');
+            dispatchTelegramAlert('on_long_wait_patio', msg, telegramConfig).catch(console.warn);
+          }
+        });
+    }
+
+    // Evaluar camiones en andén sin liberar
+    if (telegramConfig.rules.on_long_dock_stay) {
+      trucks
+        .filter(t => t.status === 'anden' && (t.start_time || t.entry_time))
+        .forEach(t => {
+          const mins = Math.floor((nowMs - new Date(t.start_time || t.entry_time).getTime()) / 60000);
+          const alertKey = `dock-${t.id}-${dockLimitMins}`;
+          if (mins >= dockLimitMins && mins < 720 && !sentSet.has(alertKey)) {
+            sentSet.add(alertKey);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(sentSet).slice(-200)));
+            const plate = t.tractor_plate || t.patent || 'S/P';
+            const dockObj = docksRef.current.find(d => d.id === t.dock_id) || t.dock;
+            const dockName = dockObj?.name || 'Andén';
+            const msg = [
+              `⚠️ <b>ALERTA: TIEMPO EXCEDIDO EN ANDÉN</b>`,
+              `📍 <b>Andén:</b> ${dockName}`,
+              `🚛 <b>Camión:</b> <code>${plate}</code>`,
+              `👤 <b>Chofer:</b> ${t.driver}`,
+              `⏱️ <b>Tiempo en Andén:</b> ${mins} min (Límite configurado: ${dockLimitMins} min)`,
+              `💡 <i>Si el camión ya fue despachado físicamente, recuerda escanear el QR del semáforo o liberarlo en Nexus Dock.</i>`,
+            ].join('\n');
+            dispatchTelegramAlert('on_long_dock_stay', msg, telegramConfig).catch(console.warn);
+          }
+        });
+    }
+  }, [trucks, currentTime, telegramConfig]);
 
   // Cargar usuarios cuando se selecciona la pestaña de usuarios
   useEffect(() => {
@@ -2007,6 +2137,21 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
       ]);
 
       if (error) throw error;
+
+      if (targetStatus === 'espera') {
+        dispatchTelegramAlert(
+          'on_arrival_patio',
+          [
+            `🚛 <b>LLEGADA DE CAMIÓN A PATIO</b>`,
+            `🔢 <b>Tractor:</b> <code>${finalTractor}</code>${finalTrailer ? ` / Rampla: <code>${finalTrailer}</code>` : ''}`,
+            `👤 <b>Chofer:</b> ${finalDriverName}`,
+            `📦 <b>Operación:</b> ${operationType} · ${carrierVal}`,
+            `🕒 <b>Hora Ingreso:</b> ${new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs`,
+          ].join('\n'),
+          telegramConfig
+        ).catch(console.warn);
+      }
+
       fetchData();
     } catch (err: any) {
       console.error('Error ingresando camión:', err);
@@ -2039,6 +2184,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const handleDispatchPlanta2 = async (truckId: string) => {
     setErrorMsg(null);
     const nowISO = new Date().toISOString();
+    const dispatchedTruck = trucks.find(t => t.id === truckId);
 
     // UI Optimista
     setTrucks(prev => prev.map(t => {
@@ -2062,6 +2208,22 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         .eq('id', truckId);
 
       if (error) throw error;
+
+      if (dispatchedTruck) {
+        const plate = dispatchedTruck.tractor_plate || dispatchedTruck.patent || 'S/P';
+        dispatchTelegramAlert(
+          'on_planta2_dispatch',
+          [
+            `🏭 <b>DESPACHO EN RUTA DESDE PLANTA 2</b>`,
+            `🚛 <b>Tractor:</b> <code>${plate}</code>${dispatchedTruck.trailer_plate ? ` / Rampla: <code>${dispatchedTruck.trailer_plate}</code>` : ''}`,
+            `👤 <b>Chofer:</b> ${dispatchedTruck.driver}`,
+            `📦 <b>Carga:</b> ${dispatchedTruck.carrier}`,
+            `🕒 <b>Salida Planta 2:</b> ${new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs`,
+          ].join('\n'),
+          telegramConfig
+        ).catch(console.warn);
+      }
+
       fetchData(false);
     } catch (err: any) {
       console.error('Error al despachar desde Planta 2:', err);
@@ -2519,6 +2681,18 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         type: 'arrival',
         tag: `arrival-${truckId}`
       });
+
+      dispatchTelegramAlert(
+        'on_arrival_patio',
+        [
+          `🚛 <b>LLEGADA DE CAMIÓN A PATIO</b>`,
+          `🔢 <b>Tractor:</b> <code>${plate}</code>${truck.trailer_plate ? ` / Rampla: <code>${truck.trailer_plate}</code>` : ''}`,
+          `👤 <b>Chofer:</b> ${driver}`,
+          `📦 <b>Operación:</b> ${truck.type} · ${truck.carrier}`,
+          `🕒 <b>Hora Ingreso:</b> ${new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs`,
+        ].join('\n'),
+        telegramConfig
+      ).catch(console.warn);
     }
 
     try {
@@ -2771,6 +2945,19 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         type: 'assignment',
         tag: `assignment-${truckId}`
       });
+
+      dispatchTelegramAlert(
+        'on_dock_assigned',
+        [
+          `🏗️ <b>CAMIÓN ASIGNADO A ANDÉN</b>`,
+          `📍 <b>Andén:</b> ${dockName}`,
+          `🚛 <b>Tractor:</b> <code>${plate}</code>${truck.trailer_plate ? ` / Rampla: <code>${truck.trailer_plate}</code>` : ''}`,
+          `👤 <b>Chofer:</b> ${truck.driver}`,
+          `📦 <b>Operación:</b> ${truck.type} · ${truck.carrier}`,
+          `🕒 <b>Hora:</b> ${new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs`,
+        ].join('\n'),
+        telegramConfig
+      ).catch(console.warn);
     }
 
     try {
@@ -2803,6 +2990,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const handleFinishOperation = async (truckId: string, dockId: string | null) => {
     setErrorMsg(null);
     setSelectedCompletedDate(getTodayDateString());
+    const finishedTruck = trucks.find(t => t.id === truckId);
+    const freedDock = docks.find(d => d.id === dockId);
 
     setTrucks(prev => prev.map(t => {
       if (t.id === truckId) {
@@ -2844,6 +3033,24 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
           .eq('id', dockId);
 
         if (dockError) throw dockError;
+      }
+
+      if (finishedTruck) {
+        const plate = finishedTruck.tractor_plate || finishedTruck.patent || 'S/P';
+        const dName = freedDock?.name || finishedTruck.dock?.name || 'Andén';
+        const durMs = finishedTruck.start_time ? Date.now() - new Date(finishedTruck.start_time).getTime() : null;
+        dispatchTelegramAlert(
+          'on_dock_released',
+          [
+            `✅ <b>ANDÉN LIBERADO / CAMIÓN DESPACHADO</b>`,
+            `📍 <b>Andén:</b> ${dName}`,
+            `🚛 <b>Tractor:</b> <code>${plate}</code>${finishedTruck.trailer_plate ? ` / Rampla: <code>${finishedTruck.trailer_plate}</code>` : ''}`,
+            `👤 <b>Chofer:</b> ${finishedTruck.driver}`,
+            durMs ? `⏱️ <b>Tiempo en Andén:</b> ${formatDurationMs(durMs)}` : '',
+            `🕒 <b>Hora Despacho:</b> ${new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} hrs`,
+          ].filter(Boolean).join('\n'),
+          telegramConfig
+        ).catch(console.warn);
       }
 
       fetchData();
@@ -3293,6 +3500,42 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             </button>
           </div>
 
+          <div className="pt-3 border-t border-white/10 mt-3 space-y-1.5">
+            <span className="px-4 text-[10px] font-bold text-emerald-300/80 uppercase tracking-widest block mb-2">Automatización & QR</span>
+            <button
+              onClick={() => {
+                setActiveTab('qr_docks');
+                setIsMobileMenuOpen(false);
+              }}
+              className={`flex items-center justify-between w-full px-4 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'qr_docks' ? 'bg-white/15 text-white shadow-sm' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
+            >
+              <div className="flex items-center gap-3">
+                <QrCode className="w-4 h-4 shrink-0 text-emerald-300" />
+                <span>Códigos QR Andenes</span>
+              </div>
+              <span className="bg-emerald-400/20 text-emerald-200 text-[9px] px-1.5 py-0.2 rounded font-bold">
+                QR
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('telegram');
+                setIsMobileMenuOpen(false);
+              }}
+              className={`flex items-center justify-between w-full px-4 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'telegram' ? 'bg-white/15 text-white shadow-sm' : 'text-emerald-100 hover:bg-white/5 hover:text-white'}`}
+            >
+              <div className="flex items-center gap-3">
+                <Send className="w-4 h-4 shrink-0 text-sky-300" />
+                <span>Alertas Telegram</span>
+              </div>
+              <span className={`text-[9px] px-1.5 py-0.2 rounded font-black uppercase ${
+                telegramConfig.enabled ? 'bg-sky-400 text-slate-950' : 'bg-white/10 text-white/60'
+              }`}>
+                {telegramConfig.accounts.filter(a => a.enabled).length}
+              </span>
+            </button>
+          </div>
+
           {isNexusOwner && (
             <div className="pt-3 border-t border-white/10 mt-3">
               <span className="px-4 text-[10px] font-bold text-amber-300/90 uppercase tracking-widest block mb-2 flex items-center gap-1.5">
@@ -3405,6 +3648,8 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   {activeTab === 'scheduler' && 'Matriz de Agendamiento'}
                   {activeTab === 'history' && 'Historial Operaciones'}
                   {activeTab === 'reports' && 'Reportes & Métricas'}
+                  {activeTab === 'qr_docks' && 'Códigos QR de Liberación de Andenes'}
+                  {activeTab === 'telegram' && 'Alertas Programables de Telegram'}
                   {activeTab === 'users' && 'Gestión de Usuarios'}
                 </h1>
                 
@@ -5774,6 +6019,19 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 })()
               )}
             </section>
+
+          ) : activeTab === 'qr_docks' ? (
+            <QrDockManager
+              docks={docks}
+              trucks={trucks}
+              onOpenSimulateQr={(dockId) => setQrReleaseDockId(dockId)}
+            />
+
+          ) : activeTab === 'telegram' ? (
+            <TelegramAlertsManager
+              config={telegramConfig}
+              onChangeConfig={setTelegramConfig}
+            />
 
           ) : activeTab === 'users' ? (
             /* ====================================================
@@ -8717,6 +8975,15 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal de Liberación Rápida de Andén vía QR Semáforo */}
+      {qrReleaseDockId && (
+        <QrDockReleaseModal
+          dockId={qrReleaseDockId}
+          onClose={handleCloseQrModal}
+          onReleasedSuccess={() => fetchData(false)}
+        />
       )}
 
       {/* Contenedor Exclusivo de Impresión (montado directo en body con createPortal para evitar que el DOM de la app genere páginas extra) */}

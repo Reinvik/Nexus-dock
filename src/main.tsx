@@ -7,6 +7,8 @@ import DriverPortal from './components/DriverPortal.tsx';
 import { supabase } from './lib/supabase.ts';
 import type { User } from '@supabase/supabase-js';
 
+import { QrDockReleaseModal } from './components/QrDockManager.tsx';
+
 const ALLOWED_DOMAIN = 'cial.cl';
 
 function Root() {
@@ -15,6 +17,20 @@ function Root() {
   const [driverModeActive, setDriverModeActive] = useState<boolean>(
     localStorage.getItem('nexus_driver_view_active') === 'true'
   );
+  const [qrReleaseDockId, setQrReleaseDockId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('qr_release_dock');
+  });
+
+  const handleCloseQrModal = () => {
+    setQrReleaseDockId(null);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('qr_release_dock');
+      window.history.replaceState({}, '', url.toString());
+    }
+  };
 
   useEffect(() => {
     // Obtener sesión actual
@@ -56,8 +72,20 @@ function Root() {
     );
   }
 
+  // 0. Si se abrió escaneando el QR de un semáforo de andén (?qr_release_dock=...) y no hay sesión en App
+  if (qrReleaseDockId && !user) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <QrDockReleaseModal
+          dockId={qrReleaseDockId}
+          onClose={handleCloseQrModal}
+        />
+      </div>
+    );
+  }
+
   // 1. Si el modo de choferes está activo, se muestra el Portal de Conductores
-  if (driverModeActive) {
+  if (driverModeActive && !qrReleaseDockId) {
     return (
       <DriverPortal 
         onBackToLogin={() => {

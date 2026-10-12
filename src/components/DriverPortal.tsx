@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { dispatchTelegramAlert } from '../lib/telegram';
 import cialLogo from '../assets/cial-alimentos-logo.png';
 import { 
   Truck, 
@@ -431,6 +432,15 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
             ? '🚚 ¡Llegada confirmada! Conectado a tu viaje oficial de Planta 2.'
             : '📅 ¡Llegada confirmada! Conectado a tu cita programada.'
         );
+        dispatchTelegramAlert(
+          'on_arrival_patio',
+          `🅿️ <b>Llegada de Camión a Patio (Portal Chofer)</b>\n\n` +
+          `🚛 <b>Patente:</b> <code>${data.tractor_plate || data.patent}</code>\n` +
+          `👤 <b>Chofer:</b> ${data.driver}\n` +
+          `🏢 <b>Carga/Empresa:</b> ${data.carrier}\n` +
+          `📍 <b>Origen:</b> ${foundCita.origin === 'planta_2' || foundCita.status === 'en_ruta' ? 'Planta 2' : 'Cita Programada'}\n` +
+          `⏰ <b>Hora:</b> ${new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}`
+        );
       }
     } catch (e) {
       console.error(e);
@@ -510,6 +520,15 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
                     ? '🚚 ¡Llegada confirmada! Conectado a tu viaje oficial de Planta 2 para evitar duplicados.'
                     : '📅 ¡Llegada confirmada! Conectado a tu cita programada.'
                 );
+                dispatchTelegramAlert(
+                  'on_arrival_patio',
+                  `🅿️ <b>Llegada de Camión a Patio (Portal Chofer)</b>\n\n` +
+                  `🚛 <b>Patente:</b> <code>${updatedOp.tractor_plate || updatedOp.patent}</code>\n` +
+                  `👤 <b>Chofer:</b> ${updatedOp.driver}\n` +
+                  `🏢 <b>Carga/Empresa:</b> ${updatedOp.carrier}\n` +
+                  `📍 <b>Origen:</b> ${updatedOp.origin === 'planta_2' || chosen.status === 'en_ruta' ? 'Planta 2' : 'Cita Programada'}\n` +
+                  `⏰ <b>Hora:</b> ${new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}`
+                );
                 await loadActiveOp(updatedOp.id);
                 return;
               }
@@ -561,6 +580,14 @@ export default function DriverPortal({ onBackToLogin }: { onBackToLogin: () => v
         setTrailerPlate('');
         setCustomCargoType('');
         setDetectedTrip(null);
+        dispatchTelegramAlert(
+          'on_arrival_patio',
+          `🅿️ <b>Nuevo Ingreso Express en Patio (Portal Chofer)</b>\n\n` +
+          `🚛 <b>Patente:</b> <code>${data.tractor_plate || data.patent}</code>\n` +
+          `👤 <b>Chofer:</b> ${data.driver}\n` +
+          `🏢 <b>Carga/Empresa:</b> ${data.carrier}\n` +
+          `⏰ <b>Hora:</b> ${new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}`
+        );
         await loadActiveOp(data.id);
       }
     } catch (e: any) {
