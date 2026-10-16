@@ -57,7 +57,8 @@ import {
   VolumeX,
   Smartphone,
   AlertTriangle,
-  QrCode
+  QrCode,
+  FileSpreadsheet
 } from 'lucide-react';
 import { supabase, supabaseMain, activeSchema } from './lib/supabase';
 import cialLogo from './assets/cial-alimentos-logo.png';
@@ -85,6 +86,7 @@ import {
   fetchTelegramConfig,
   dispatchTelegramAlert
 } from './lib/telegram';
+import { exportOperationsToExcel } from './utils/exportOperationsExcel';
 
 export const OWNER_EMAILS = ['ariel.mella@cial.cl'];
 
@@ -899,6 +901,61 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
   const [historyPage, setHistoryPage] = useState(1);
   const HISTORY_PAGE_SIZE = 15;
 
+  // States para Exportación de Excel de Historial y Tiempos
+  const [showExcelExportModal, setShowExcelExportModal] = useState(false);
+  const [excelExportMode, setExcelExportMode] = useState<'all_db' | 'filtered'>('all_db');
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [excelExportStatus, setExcelExportStatus] = useState<string | null>(null);
+  const [excelExportSuccess, setExcelExportSuccess] = useState<string | null>(null);
+
+  const currentHistoryFilteredCount = useMemo(() => {
+    return trucks.filter(t => {
+      const searchLower = historySearch.toLowerCase();
+      const matchSearch = !historySearch || [t.driver, t.tractor_plate, t.trailer_plate, t.carrier].some(f => f?.toLowerCase().includes(searchLower));
+      const mappedHistoryStatus = historyStatus === 'en_patio' ? 'espera' : historyStatus === 'en_anden' ? 'anden' : historyStatus;
+      const matchStatus = historyStatus === 'todos' || t.status === mappedHistoryStatus;
+      const matchOp = historyOpType === 'todos' || t.type === historyOpType;
+      const matchCargo = historyCargoType === 'todos' || t.carrier === historyCargoType;
+      return matchSearch && matchStatus && matchOp && matchCargo;
+    }).length;
+  }, [trucks, historySearch, historyStatus, historyOpType, historyCargoType]);
+
+  const handleExecuteExcelExport = async (mode: 'all_db' | 'filtered') => {
+    setIsExportingExcel(true);
+    setExcelExportStatus('Iniciando exportación de operaciones...');
+    setExcelExportSuccess(null);
+    try {
+      const filteredOps = trucks.filter(t => {
+        const searchLower = historySearch.toLowerCase();
+        const matchSearch = !historySearch || [t.driver, t.tractor_plate, t.trailer_plate, t.carrier].some(f => f?.toLowerCase().includes(searchLower));
+        const mappedHistoryStatus = historyStatus === 'en_patio' ? 'espera' : historyStatus === 'en_anden' ? 'anden' : historyStatus;
+        const matchStatus = historyStatus === 'todos' || t.status === mappedHistoryStatus;
+        const matchOp = historyOpType === 'todos' || t.type === historyOpType;
+        const matchCargo = historyCargoType === 'todos' || t.carrier === historyCargoType;
+        return matchSearch && matchStatus && matchOp && matchCargo;
+      }).sort((a, b) => new Date(b.entry_time).getTime() - new Date(a.entry_time).getTime());
+
+      const res = await exportOperationsToExcel({
+        mode,
+        filteredOperations: filteredOps,
+        docks,
+        onProgress: (msg) => setExcelExportStatus(msg)
+      });
+
+      setExcelExportStatus(null);
+      setExcelExportSuccess(`¡Excel generado con éxito! ${res.count} operaciones procesadas.`);
+      setTimeout(() => {
+        setShowExcelExportModal(false);
+        setExcelExportSuccess(null);
+      }, 2400);
+    } catch (err: any) {
+      console.error('Error al exportar Excel:', err);
+      alert('Error al exportar archivo Excel: ' + (err.message || ''));
+      setExcelExportStatus(null);
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
 
   // Reloj de cabecera
   useEffect(() => {
@@ -5590,9 +5647,20 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   <h2 className="text-xl font-extrabold text-slate-900">Historial de Operaciones</h2>
                   <p className="text-xs text-slate-500 font-semibold mt-0.5">Registro completo de camiones ingresados, en andén y despachados</p>
                 </div>
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 shadow-sm">
-                  <History className="w-4 h-4 text-[#0a5c36]" />
-                  {trucks.length} registros totales
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 shadow-sm">
+                    <History className="w-4 h-4 text-[#0a5c36]" />
+                    {trucks.length} registros cargados
+                  </div>
+
+                  <button
+                    onClick={() => { setShowExcelExportModal(true); setExcelExportSuccess(null); setExcelExportStatus(null); }}
+                    className="flex items-center gap-2 text-xs font-black text-white bg-[#0a5c36] hover:bg-[#08482a] active:scale-95 transition-all px-4 py-2.5 rounded-xl shadow-md shadow-[#0a5c36]/20 cursor-pointer"
+                    title="Descargar libro Excel con todas las marcas de tiempo y métricas de la base de datos"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-300" />
+                    <span>Descargar Excel con Tiempos</span>
+                  </button>
                 </div>
               </div>
 
@@ -5639,14 +5707,27 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                   <option value="Refrigerado">Refrigerado</option>
                   <option value="Otro">Otro</option>
                 </select>
-                {(historySearch || historyStatus !== 'todos' || historyOpType !== 'todos' || historyCargoType !== 'todos') && (
+
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={() => { setHistorySearch(''); setHistoryStatus('todos'); setHistoryOpType('todos'); setHistoryCargoType('todos'); setHistoryPage(1); }}
-                    className="text-xs font-bold text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl px-3 py-2 transition-all cursor-pointer"
+                    onClick={() => handleExecuteExcelExport('filtered')}
+                    disabled={isExportingExcel}
+                    className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 hover:text-emerald-950 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300/80 rounded-xl px-3 py-2 transition-all cursor-pointer disabled:opacity-50"
+                    title="Descargar Excel con los camiones que cumplen los filtros actuales de la pantalla"
                   >
-                    Limpiar filtros
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Excel Filtrado</span>
                   </button>
-                )}
+
+                  {(historySearch || historyStatus !== 'todos' || historyOpType !== 'todos' || historyCargoType !== 'todos') && (
+                    <button
+                      onClick={() => { setHistorySearch(''); setHistoryStatus('todos'); setHistoryOpType('todos'); setHistoryCargoType('todos'); setHistoryPage(1); }}
+                      className="text-xs font-bold text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl px-3 py-2 transition-all cursor-pointer"
+                    >
+                      Limpiar filtros
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Tabla */}
@@ -7528,6 +7609,156 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Modal de Descarga Excel con Todos los Tiempos */}
+      {showExcelExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div 
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" 
+            onClick={() => { if (!isExportingExcel) { setShowExcelExportModal(false); setExcelExportSuccess(null); setExcelExportStatus(null); } }} 
+          />
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-7 w-full max-w-lg relative z-10 space-y-5 shadow-2xl text-slate-800 animate-fadeIn">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3.5">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-emerald-50 text-[#0a5c36] rounded-2xl border border-emerald-100">
+                  <FileSpreadsheet className="w-6 h-6" />
+                </div>
+                <div>
+                  <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-emerald-200">
+                    Exportación Oficial · Nexus Dock
+                  </span>
+                  <h3 className="font-extrabold text-lg text-slate-900 mt-1">Descargar Excel con Todos los Tiempos</h3>
+                  <p className="text-xs text-slate-500 font-semibold mt-0.5">
+                    Historial con marcas temporales exactas y duraciones calculadas
+                  </p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => { if (!isExportingExcel) { setShowExcelExportModal(false); setExcelExportSuccess(null); setExcelExportStatus(null); } }}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                disabled={isExportingExcel}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Selector de Alcance */}
+            <div className="space-y-3">
+              <label className="text-xs font-bold text-slate-700 block">
+                Selecciona qué registros deseas descargar:
+              </label>
+
+              {/* Opción 1: Base de Datos Completa */}
+              <div 
+                onClick={() => !isExportingExcel && setExcelExportMode('all_db')}
+                className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-start gap-3.5 ${
+                  excelExportMode === 'all_db'
+                    ? 'border-[#0a5c36] bg-emerald-50/50 shadow-xs ring-1 ring-[#0a5c36]'
+                    : 'border-slate-200 hover:border-slate-300 bg-white'
+                }`}
+              >
+                <input 
+                  type="radio" 
+                  name="excel_export_scope"
+                  checked={excelExportMode === 'all_db'} 
+                  onChange={() => setExcelExportMode('all_db')}
+                  disabled={isExportingExcel}
+                  className="mt-1 text-[#0a5c36] focus:ring-[#0a5c36] cursor-pointer"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-extrabold text-slate-900">Base de Datos Completa (Recomendado)</span>
+                    <span className="text-[10px] font-black bg-[#0a5c36] text-white px-2 py-0.5 rounded-full">Todo el Historial</span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                    Extrae el 100% de los camiones registrados en Supabase. Incluye los 10 timestamps de auditoría (creación, inicio P2, salida P2, citas, llegada patio, andén, término y salida), tiempos de espera, andén, traslado y resumen KPI.
+                  </p>
+                </div>
+              </div>
+
+              {/* Opción 2: Solo Registros Filtrados */}
+              <div 
+                onClick={() => !isExportingExcel && setExcelExportMode('filtered')}
+                className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-start gap-3.5 ${
+                  excelExportMode === 'filtered'
+                    ? 'border-[#0a5c36] bg-emerald-50/50 shadow-xs ring-1 ring-[#0a5c36]'
+                    : 'border-slate-200 hover:border-slate-300 bg-white'
+                }`}
+              >
+                <input 
+                  type="radio" 
+                  name="excel_export_scope"
+                  checked={excelExportMode === 'filtered'} 
+                  onChange={() => setExcelExportMode('filtered')}
+                  disabled={isExportingExcel}
+                  className="mt-1 text-[#0a5c36] focus:ring-[#0a5c36] cursor-pointer"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-extrabold text-slate-900">Solo Vista Filtrada Actual</span>
+                    <span className="text-[10px] font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full border border-slate-200">
+                      {currentHistoryFilteredCount} operaciones
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                    Descarga únicamente los camiones que coinciden con los filtros aplicados en pantalla (búsqueda, estado, tipo de carga o tipo de operación).
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Estado de Progreso o Éxito */}
+            {excelExportStatus && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 flex items-center gap-3 animate-fadeIn">
+                <RefreshCw className="w-5 h-5 text-[#0a5c36] animate-spin shrink-0" />
+                <div className="text-xs font-bold text-emerald-950">
+                  {excelExportStatus}
+                </div>
+              </div>
+            )}
+
+            {excelExportSuccess && (
+              <div className="bg-emerald-600 text-white rounded-2xl p-3.5 flex items-center gap-3 animate-fadeIn shadow-md">
+                <CheckCircle2 className="w-5 h-5 shrink-0" />
+                <div className="text-xs font-bold">
+                  {excelExportSuccess}
+                </div>
+              </div>
+            )}
+
+            {/* Acciones */}
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => { setShowExcelExportModal(false); setExcelExportSuccess(null); setExcelExportStatus(null); }}
+                disabled={isExportingExcel}
+                className="bg-slate-50 border border-slate-200 text-slate-600 px-4 py-3 rounded-xl text-xs font-bold flex-1 transition-colors hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+              >
+                Cerrar
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExecuteExcelExport(excelExportMode)}
+                disabled={isExportingExcel}
+                className="bg-[#0a5c36] hover:bg-[#08482a] active:scale-95 text-white px-5 py-3 rounded-xl text-xs font-black flex-[1.4] transition-all cursor-pointer shadow-lg shadow-[#0a5c36]/25 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isExportingExcel ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-emerald-200" />
+                    <span>Generando Archivo...</span>
+                  </>
+                ) : (
+                  <>
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-300" />
+                    <span>Descargar Archivo Excel (.xlsx)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
