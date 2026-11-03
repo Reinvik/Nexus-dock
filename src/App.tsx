@@ -67,6 +67,8 @@ import type { User as SupabaseUser } from '@supabase/supabase-js';
 import {
   registerServiceWorker,
   getNotificationPermissionState,
+  checkNotificationPermission,
+  setupNativeNotificationChannel,
   requestNotificationPermission,
   areNotificationsEnabled,
   setNotificationsEnabled,
@@ -79,6 +81,9 @@ import {
 } from './utils/notifications';
 import { EfficiencyCycleReport } from './components/EfficiencyCycleReport';
 import { QrDockManager, QrDockReleaseModal } from './components/QrDockManager';
+import { QrScanModal } from './components/QrScanModal';
+import { scanNativeQrCode, parseScannedQr } from './utils/nativeQrScanner';
+import { Capacitor } from '@capacitor/core';
 import { TelegramAlertsManager } from './components/TelegramAlertsManager';
 import {
   type TelegramConfig,
@@ -615,6 +620,34 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     }
   };
 
+  const [showManualQrModal, setShowManualQrModal] = useState(false);
+
+  const handleProcessScannedCode = (scannedText: string) => {
+    const parsed = parseScannedQr(scannedText, docks);
+    if (parsed.type === 'dock' && parsed.dockId) {
+      setQrReleaseDockId(parsed.dockId);
+    } else if (parsed.type === 'truck' && parsed.query) {
+      setSearchQuery(parsed.query);
+    }
+  };
+
+  const handleTriggerQrScanner = async () => {
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const code = await scanNativeQrCode();
+        if (code) {
+          handleProcessScannedCode(code);
+        }
+      } else {
+        setShowManualQrModal(true);
+      }
+    } catch (err) {
+      console.error('Error al iniciar escáner QR:', err);
+      setShowManualQrModal(true);
+    }
+  };
+
+
   const [telegramConfig, setTelegramConfig] = useState<TelegramConfig>({
     id: 'default',
     bot_token: '',
@@ -1089,11 +1122,18 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
     };
   }, []);
 
-  // Inicialización de Service Worker PWA y captura de evento de instalación
+  // Inicialización de Service Worker PWA, permisos móviles nativos y captura de evento de instalación
   useEffect(() => {
-    registerServiceWorker().then(() => {
-      setNotificationPermission(getNotificationPermissionState());
-    });
+    registerServiceWorker();
+
+    const initMobileNotifications = async () => {
+      const perm = await checkNotificationPermission();
+      setNotificationPermission(perm);
+      if (perm === 'granted') {
+        await setupNativeNotificationChannel();
+      }
+    };
+    initMobileNotifications();
 
     const handleBeforeInstall = (e: Event) => {
       e.preventDefault();
@@ -3373,12 +3413,16 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
         setNotificationsActive(true);
         setNotificationsEnabled(true);
         sendMobileNotification({
-          title: '🔔 Notificaciones Activadas',
-          body: 'Recibirás avisos de llegada a patio, asignación de andén y demoras.',
+          title: '🔔 Alertas Activadas',
+          body: 'Recibirás avisos de llegada a patio, asignación de andén y demoras 24/7.',
           type: 'arrival'
         });
       } else {
-        alert('Para recibir alertas en tu celular, debes permitir las notificaciones en la ventana del navegador.');
+        if (Capacitor.isNativePlatform()) {
+          alert('Para recibir alertas 24/7 como WhatsApp en tu celular, debes conceder el permiso de notificaciones a CIAL Inbound en Ajustes de Android > Aplicaciones.');
+        } else {
+          alert('Para recibir alertas en tu celular, debes permitir las notificaciones en la ventana del navegador.');
+        }
       }
     } else {
       const next = !notificationsActive;
@@ -3574,6 +3618,24 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 QR
               </span>
             </button>
+
+            {/* Escanear QR Directo con la Cámara */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                handleTriggerQrScanner();
+              }}
+              className="flex items-center justify-between w-full px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer bg-emerald-500/25 text-emerald-100 border border-emerald-500/40 hover:bg-emerald-500/40 shadow-sm"
+            >
+              <div className="flex items-center gap-3">
+                <QrCode className="w-4 h-4 shrink-0 text-emerald-300 animate-pulse" />
+                <span>Escanear QR (Cámara)</span>
+              </div>
+              <span className="text-[9px] bg-emerald-400 text-slate-950 font-black px-1.5 py-0.5 rounded">
+                SCAN
+              </span>
+            </button>
             <button
               onClick={() => {
                 setActiveTab('telegram');
@@ -3752,6 +3814,17 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               )}
             </div>
 
+            {/* Botón de Escanear QR Nativo CIAL */}
+            <button 
+              type="button"
+              onClick={handleTriggerQrScanner}
+              title="Escanear Código QR de Andén / Chofer (Google ML Kit)"
+              className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 sm:px-3 py-2 rounded-xl text-xs font-black shadow-sm transition-all active:scale-95 cursor-pointer shrink-0"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Escanear QR</span>
+            </button>
+
             {/* Botón de Notificaciones Móviles y PWA */}
             <button 
               type="button"
@@ -3905,7 +3978,9 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                     mobileYardColumn === 'all' ? 'bg-[#0a5c36] text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600'
                   }`}
                 >
-                  Todas ({filteredTrucks.length})
+                  Todas ({
+                    filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta' || t.status === 'espera' || t.status === 'anden' || (searchQuery.trim().length > 0 && t.origin === 'planta_2' && t.status === 'planta_carga')).length + completedTrucksForSelectedDate.length
+                  })
                 </button>
                 <button
                   type="button"
@@ -3952,7 +4027,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                 <div 
                   onDragOver={handleDragOver}
                   onDrop={(e) => handleDrop(e, 'cita')}
-                  className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 flex-col min-h-[500px] ${
+                  className={`bg-slate-100 border border-slate-200 rounded-2xl p-3.5 sm:p-4 flex-col min-h-0 md:min-h-[500px] ${
                     mobileYardColumn !== 'all' && mobileYardColumn !== 'cita' ? 'hidden md:flex' : 'flex'
                   }`}
                 >
@@ -4102,7 +4177,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                       </div>
                     ))}
                     {filteredTrucks.filter(t => t.status === 'cita' || t.status === 'en_ruta' || (searchQuery.trim().length > 0 && t.origin === 'planta_2' && t.status === 'planta_carga')).length === 0 && (
-                      <div className="text-center py-16 text-slate-400 text-sm font-semibold">No hay citas ni camiones en ruta</div>
+                      <div className="text-center py-6 md:py-16 text-slate-400 text-xs md:text-sm font-semibold">No hay citas ni camiones en ruta</div>
                     )}
                   </div>
                 </div>
@@ -4111,7 +4186,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               <div 
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, 'espera')}
-                className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 flex-col min-h-[500px] ${
+                className={`bg-slate-100 border border-slate-200 rounded-2xl p-3.5 sm:p-4 flex-col min-h-0 md:min-h-[500px] ${
                   mobileYardColumn !== 'all' && mobileYardColumn !== 'espera' ? 'hidden md:flex' : 'flex'
                 }`}
               >
@@ -4249,7 +4324,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                     </div>
                   ))}
                   {filteredTrucks.filter(t => t.status === 'espera').length === 0 && (
-                    <div className="text-center py-16 text-slate-400 text-sm font-semibold">Sin camiones en espera</div>
+                    <div className="text-center py-6 md:py-16 text-slate-400 text-xs md:text-sm font-semibold">Sin camiones en espera</div>
                   )}
                 </div>
               </div>
@@ -4258,7 +4333,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               <div 
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, 'anden')}
-                className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 sm:p-5 flex-col min-h-[500px] ${
+                className={`bg-slate-100 border border-slate-200 rounded-2xl p-3.5 sm:p-5 flex-col min-h-0 md:min-h-[500px] ${
                   mobileYardColumn !== 'all' && mobileYardColumn !== 'anden' ? 'hidden md:flex' : 'flex'
                 }`}
               >
@@ -4390,7 +4465,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                     );
                   })}
                   {filteredTrucks.filter(t => t.status === 'anden').length === 0 && (
-                    <div className="text-center py-16 text-slate-400 text-sm font-semibold">Sin camiones operando</div>
+                    <div className="text-center py-6 md:py-16 text-slate-400 text-xs md:text-sm font-semibold">Sin camiones operando</div>
                   )}
                 </div>
               </div>
@@ -4399,7 +4474,7 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
               <div 
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, 'completado')}
-                className={`bg-slate-100 border border-slate-200 rounded-2xl p-4 sm:p-5 flex-col min-h-[500px] ${
+                className={`bg-slate-100 border border-slate-200 rounded-2xl p-3.5 sm:p-5 flex-col min-h-0 md:min-h-[500px] ${
                   mobileYardColumn !== 'all' && mobileYardColumn !== 'completado' ? 'hidden md:flex' : 'flex'
                 }`}
               >
@@ -8977,8 +9052,10 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
                       </div>
                       <div className="text-[10px] text-slate-500 font-medium">
                         {notificationPermission === 'granted' 
-                          ? 'Permiso de notificaciones concedido' 
-                          : 'Requiere permiso del navegador'}
+                          ? 'Permiso del sistema concedido' 
+                          : Capacitor.isNativePlatform()
+                            ? 'Requiere permiso del sistema Android'
+                            : 'Requiere permiso del navegador'}
                       </div>
                     </div>
                   </div>
@@ -8998,9 +9075,20 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
 
                 {notificationPermission !== 'granted' && (
                   <div className="text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200 leading-relaxed">
-                    💡 <strong>Tip:</strong> Al tocar <em>"Activar Alertas"</em>, presiona <strong>"Permitir"</strong> cuando tu celular o navegador te pregunte.
+                    💡 <strong>Tip:</strong> Al tocar <em>"Activar Alertas"</em>, presiona <strong>"Permitir"</strong> cuando {Capacitor.isNativePlatform() ? 'el sistema Android te solicite permiso en pantalla' : 'tu celular o navegador te pregunte'}.
                   </div>
                 )}
+              </div>
+
+              {/* Información Alertas 24/7 segundo plano estilo WhatsApp */}
+              <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200 text-xs text-slate-700 space-y-1">
+                <div className="font-bold flex items-center gap-1.5 text-emerald-800 text-[11px]">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Alertas 24/7 con teléfono bloqueado (Estilo WhatsApp)</span>
+                </div>
+                <p className="text-[10px] text-slate-600 leading-relaxed">
+                  Para que las alertas suenen en tu bolsillo con la pantalla apagada, activa el <strong>Modo Guardia en Patio</strong>. En teléfonos Samsung/Xiaomi/Motorola, ve a <em>Ajustes &gt; Aplicaciones &gt; CIAL Inbound &gt; Batería &gt; "Sin restricciones"</em> para evitar que Android suspenda la app en segundo plano.
+                </p>
               </div>
 
               {/* Modo Guardia en Patio (Keep-Alive con pantalla bloqueada) */}
@@ -9207,6 +9295,23 @@ export default function App({ currentUser: propUser }: AppProps = {}) {
           </div>
         </div>
       )}
+
+      {/* Botón flotante FAB para escaneo rápido en celular Android */}
+      <button
+        type="button"
+        onClick={handleTriggerQrScanner}
+        className="md:hidden fixed bottom-5 right-5 z-40 bg-emerald-600 hover:bg-emerald-500 text-white p-3.5 rounded-full shadow-2xl shadow-emerald-950/80 ring-2 ring-emerald-300/40 active:scale-90 transition-all flex items-center justify-center cursor-pointer"
+        title="Escanear Código QR con Cámara"
+      >
+        <QrCode className="w-6 h-6" />
+      </button>
+
+      {/* Modal de Escaneo Manual / Fallback Web */}
+      <QrScanModal
+        isOpen={showManualQrModal}
+        onClose={() => setShowManualQrModal(false)}
+        onCodeScanned={handleProcessScannedCode}
+      />
 
       {/* Modal de Liberación Rápida de Andén vía QR Semáforo */}
       {qrReleaseDockId && (

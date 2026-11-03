@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CIAL Inbound</string>
+    <string name="title_activity_main">CIAL Inbound</string>
+    <string name="package_name">com.smartlean.nexusinbound</string>
+    <string name="custom_url_scheme">com.smartlean.nexusinbound</string>
+</resources>

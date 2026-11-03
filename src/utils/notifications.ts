@@ -1,9 +1,32 @@
 // Sistema de Notificaciones Móviles, Audio Háptico y PWA para Nexus Dock
+import { Capacitor } from '@capacitor/core';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 export type NotificationType = 'arrival' | 'assignment' | 'alert';
 
 const STORAGE_KEY_ENABLED = 'nexus_dock_notifications_enabled';
 const STORAGE_KEY_SOUND_ENABLED = 'nexus_dock_sound_enabled';
+export const CHANNEL_ID = 'cial_inbound_alerts';
+
+// Configurar canal de alta prioridad para Android (Heads-up banner con sonido)
+export const setupNativeNotificationChannel = async () => {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await LocalNotifications.createChannel({
+      id: CHANNEL_ID,
+      name: 'Alertas CIAL Inbound',
+      description: 'Llegada de camiones a patio, asignación de andenes y alertas 24/7',
+      importance: 5, // MAX / HIGH: aviso flotante (heads-up banner) con sonido
+      visibility: 1, // VISIBILITY_PUBLIC: visible en pantalla de bloqueo
+      sound: 'res_default',
+      vibration: true,
+      lights: true,
+      lightColor: '#0a5c36'
+    });
+  } catch (err) {
+    console.warn('[Notifications] Error configurando canal nativo:', err);
+  }
+};
 
 // Registrar Service Worker para permitir notificaciones en segundo plano y PWA
 export const registerServiceWorker = async (): Promise<ServiceWorkerRegistration | null> => {
@@ -19,17 +42,63 @@ export const registerServiceWorker = async (): Promise<ServiceWorkerRegistration
   }
 };
 
-// Verificar estado de permisos de notificación
-export const getNotificationPermissionState = (): NotificationPermission => {
-  if (typeof window === 'undefined' || !('Notification' in window)) {
+// Verificar estado de permisos de notificación (asíncrono con soporte Android nativo)
+export const checkNotificationPermission = async (): Promise<'granted' | 'denied' | 'default'> => {
+  if (typeof window === 'undefined') return 'denied';
+
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const status = await LocalNotifications.checkPermissions();
+      if (status.display === 'granted') return 'granted';
+      if (status.display === 'denied') return 'denied';
+      return 'default';
+    } catch (err) {
+      console.warn('[Notifications] Error verificando permisos nativos:', err);
+      return 'denied';
+    }
+  }
+
+  if (!('Notification' in window)) {
     return 'denied';
   }
   return Notification.permission;
 };
 
-// Solicitar permisos de notificación nativa al usuario
+// Verificar estado síncrono inicial
+export const getNotificationPermissionState = (): NotificationPermission => {
+  if (typeof window === 'undefined') return 'denied';
+  if (Capacitor.isNativePlatform()) {
+    const saved = localStorage.getItem(STORAGE_KEY_ENABLED);
+    return saved === 'true' ? 'granted' : 'default';
+  }
+  if (!('Notification' in window)) {
+    return 'denied';
+  }
+  return Notification.permission;
+};
+
+// Solicitar permisos de notificación nativa al usuario (Android Nativo o Web)
 export const requestNotificationPermission = async (): Promise<boolean> => {
-  if (typeof window === 'undefined' || !('Notification' in window)) {
+  if (typeof window === 'undefined') return false;
+
+  // 1. Si es App Nativa Android (Capacitor)
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const res = await LocalNotifications.requestPermissions();
+      if (res.display === 'granted') {
+        await setupNativeNotificationChannel();
+        localStorage.setItem(STORAGE_KEY_ENABLED, 'true');
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('[Notifications] Error solicitando permisos nativos en Android:', err);
+      return false;
+    }
+  }
+
+  // 2. Si es Navegador Web / PWA
+  if (!('Notification' in window)) {
     return false;
   }
   try {
@@ -50,7 +119,7 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
 export const areNotificationsEnabled = (): boolean => {
   if (typeof window === 'undefined') return false;
   const saved = localStorage.getItem(STORAGE_KEY_ENABLED);
-  return saved !== 'false' && getNotificationPermissionState() === 'granted';
+  return saved !== 'false';
 };
 
 export const setNotificationsEnabled = (enabled: boolean) => {
@@ -265,7 +334,36 @@ export const sendMobileNotification = async ({
   playNotificationSound(type);
   triggerVibration(type);
 
-  // 2. Si no hay soporte o permisos de notificación, retornar
+  // 2. Si es App Nativa Android (Capacitor)
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const perm = await LocalNotifications.checkPermissions();
+      if (perm.display === 'granted') {
+        await setupNativeNotificationChannel();
+        const notifId = Math.floor(Math.random() * 10000000);
+        await LocalNotifications.schedule({
+          notifications: [
+            {
+              id: notifId,
+              title,
+              body,
+              channelId: CHANNEL_ID,
+              smallIcon: 'ic_launcher',
+              autoCancel: true,
+              schedule: { at: new Date(Date.now() + 80) },
+              extra: { type, tag }
+            }
+          ]
+        });
+        return;
+      }
+    } catch (nativeErr) {
+      console.warn('[Notifications] Error despachando notificación nativa:', nativeErr);
+    }
+    return;
+  }
+
+  // 3. Fallback a Navegador Web / PWA
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return;
   }

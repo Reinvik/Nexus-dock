@@ -7,9 +7,18 @@
     "dev": "vite --port 3006",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "node scripts/patch-gradle.js",
+    "cap:sync": "npm run build && node scripts/patch-gradle.js && npx cap sync android",
+    "cap:open": "npx cap open android",
+    "cap:build": "npm run build && node scripts/patch-gradle.js && npx cap sync android && cd android && gradlew.bat assembleDebug"
   },
   "dependencies": {
+    "@capacitor-mlkit/barcode-scanning": "^8.2.1",
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/local-notifications": "^8.3.1",
     "@supabase/supabase-js": "^2.108.2",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",
